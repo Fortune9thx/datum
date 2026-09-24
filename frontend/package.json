@@ -2,7 +2,7 @@
   "name": "datum-frontend",
   "version": "0.1.0",
   "private": true,
-  "description": "DATUM fail-closed shell -- Studio Next (chain 61997) only. Look-and-feel is out of scope for this pass.",
+  "description": "DATUM web app -- Studio Next (chain 61997) only. Fails closed to empty/zero state whenever the contract is not live.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

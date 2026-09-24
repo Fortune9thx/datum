@@ -17,9 +17,18 @@ future version of the original author).
 - `scripts/build_bundle.py` -- regenerates `artifacts/Datum.bundled.py`
   (currently ~40KB, well under the 52224-byte Studio ceiling) any time
   either source file changes. Run it after every edit.
-- `frontend/` -- a minimal, intentionally unstyled Next.js shell (`/`,
-  `/board`, `/e/:id`) that fails closed to empty/zero state whenever
-  `NEXT_PUBLIC_DATUM_CONTRACT_ADDRESS` is unset or has no code on-chain.
+- `frontend/` -- the Next.js web app, live at https://datum-gamma.vercel.app.
+  A marketing long-scroll at `/`, and the app under `/app` (board),
+  `/app/e/:id` (ticket), `/app/create`, `/app/stations`, `/app/portfolio`,
+  `/app/activity` and `/app/docs`. `/board` and `/e/:id` redirect to their
+  `/app` equivalents.
+
+  It fails closed in four distinct, separately-worded states, via
+  `probeContract()` in `src/lib/datum/network.ts`: no address configured,
+  address set but no code (Studio Next was reset), RPC unreachable, and
+  live. An unreachable RPC is never rendered as "no events" -- each state
+  states what is actually true, and no view ever substitutes placeholder or
+  demo rows for a live contract.
 
 ## What is NOT done yet (by explicit instruction, not oversight)
 
