@@ -7,7 +7,6 @@ primary verified coverage (see docs/STATUS.md for why gltest/genvm-lint are
 blocked locally on this machine).
 """
 
-import hashlib
 import json
 import sys
 import os
