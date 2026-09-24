@@ -1,6 +1,19 @@
 import type { Metadata } from "next";
-import { CONTRACT_ADDRESS } from "@/src/lib/datum/network";
+import { Inter, JetBrains_Mono } from "next/font/google";
+import { WalletProvider } from "@/src/components/Wallet";
 import "./globals.css";
+
+const sans = Inter({
+  subsets: ["latin"],
+  variable: "--font-sans",
+  display: "swap",
+});
+
+const mono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "DATUM",
@@ -8,14 +21,10 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  const addr = CONTRACT_ADDRESS || "0x(not deployed)";
   return (
-    <html lang="en">
+    <html lang="en" className={`${sans.variable} ${mono.variable}`}>
       <body>
-        <main>{children}</main>
-        <footer>
-          DATUM &middot; Studio Next &middot; 61997 &middot; state may reset &middot; {addr}
-        </footer>
+        <WalletProvider>{children}</WalletProvider>
       </body>
     </html>
   );

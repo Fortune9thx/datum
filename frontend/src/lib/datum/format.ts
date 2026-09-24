@@ -29,6 +29,21 @@ export function parseGenToWei(amount: string): string {
   return (BigInt(wholeDigits) * 10n ** 18n + BigInt(fracPadded || "0")).toString();
 }
 
+/** Compact UTC window, e.g. "2026-09-24 06:00 → 2026-09-24 12:00". */
+export function formatWindowCompact(window: [number, number] | null | undefined): string {
+  if (!window) return "--";
+  const at = (t: number) => new Date(t * 1000).toISOString().slice(0, 16).replace("T", " ");
+  return `${at(window[0])} → ${at(window[1])}`;
+}
+
+export function formatThreshold(
+  scaled: number | string | null | undefined,
+  cmp: string,
+  unit: string
+): string {
+  return `${cmp} ${formatScaledValue(scaled)} ${unit}`;
+}
+
 export function formatUnixWindow(window: [number, number] | null | undefined): string {
   if (!window) return "--";
   const [start, end] = window;

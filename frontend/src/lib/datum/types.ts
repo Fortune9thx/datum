@@ -38,6 +38,63 @@ export interface DatumEvent {
   agreed_value: number | null;
 }
 
+/** Every list view on the contract is paginated with this envelope. */
+export interface Page<T> {
+  rows: T[];
+  next_cursor: number | null;
+}
+
+/** One publisher's validated row inside an accepted adjudication record. */
+export interface SourceRow {
+  usable: boolean;
+  station_id?: string | null;
+  t?: number | null;
+  value_native?: number | null;
+  unit?: string | null;
+  product_status?: string | null;
+  converted?: number | null;
+  reason?: string | null;
+  digest?: string | null;
+}
+
+export interface AcceptedRecord {
+  sources?: Record<string, SourceRow>;
+  verdict?: Verdict;
+  code?: Code;
+  agreed_value?: number | null;
+  [key: string]: unknown;
+}
+
+export interface DatumRecord {
+  verdict: Verdict;
+  code: Code;
+  agreed_value: number | null;
+  accepted_record: AcceptedRecord | null;
+  state: EventState;
+}
+
+export interface DatumPosition {
+  event_id: string;
+  address?: string;
+  side: "YES" | "NO" | null;
+  stake: number | string | null;
+  state?: EventState;
+}
+
+export interface ClaimableRow {
+  address: string;
+  claimable: string;
+}
+
+/** get_activity returns whole event records for the address. */
+export type ActivityRow = DatumEvent;
+
+export interface RegistryPayload {
+  classes?: Record<string, unknown>;
+  publishers?: Record<string, Record<string, { host: string; kind: string }>>;
+  [key: string]: unknown;
+}
+
 export interface DatumConfig {
   chain_id: number;
   network: string;
