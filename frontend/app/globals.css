@@ -1,0 +1,44 @@
+/* Minimal fail-closed shell styling only -- a later design pass owns pixels. */
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  padding: 24px;
+  max-width: 880px;
+  margin-inline: auto;
+}
+
+footer {
+  margin-top: 48px;
+  padding-top: 16px;
+  border-top: 1px solid #8883;
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+.banner {
+  border: 1px solid #c66;
+  background: #c661;
+  padding: 12px;
+  border-radius: 6px;
+  margin: 16px 0;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid #8883;
+}
+
+a {
+  color: inherit;
+}

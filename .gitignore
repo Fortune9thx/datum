@@ -1,0 +1,28 @@
+# Env / secrets
+.env
+.env.local
+.env.*.local
+*.keystore.json
+*keystore*.json
+*.pem
+*mnemonic*
+
+# Node
+node_modules/
+frontend/.next/
+frontend/out/
+.vercel
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+artifacts/*.json
+
+# gltest
+gltest.config.yaml
+.gltest_cache/
+
+# OS
+.DS_Store
+Thumbs.db

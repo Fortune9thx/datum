@@ -1,0 +1,26 @@
+{
+  "name": "datum-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DATUM fail-closed shell -- Studio Next (chain 61997) only. Look-and-feel is out of scope for this pass.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "genlayer-js": "^2.0.0-rc.1",
+    "next": "15.5.23",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "15.5.23",
+    "typescript": "^5"
+  }
+}

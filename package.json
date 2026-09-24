@@ -1,0 +1,18 @@
+{
+  "name": "datum",
+  "version": "1.0.0",
+  "description": "DATUM -- a GenLayer Intelligent Contract that settles whether a named instrument at a named official station, over a locked window, cleared a locked threshold.",
+  "private": true,
+  "scripts": {
+    "bundle": "python scripts/build_bundle.py",
+    "deploy": "node scripts/deploy.mjs"
+  },
+  "keywords": ["genlayer", "intelligent-contract", "studio-dev"],
+  "author": "Fortunex9",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^18.0.0",
+    "ethers": "^6.17.0",
+    "genlayer-js": "^2.0.0-rc.1"
+  }
+}
