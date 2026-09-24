@@ -7,6 +7,7 @@
  */
 import { createClient } from "genlayer-js";
 import { studioDevnet } from "genlayer-js/chains";
+import type { CalldataEncodable } from "genlayer-js/types";
 import { CONTRACT_ADDRESS, checkLiveStatus } from "./network";
 import { describeUserError } from "./errors";
 import type { DatumConfig, DatumEvent } from "./types";
@@ -19,7 +20,7 @@ export async function isContractLive(): Promise<boolean> {
   return checkLiveStatus();
 }
 
-async function readView<T>(method: string, args: unknown[] = []): Promise<T | null> {
+async function readView<T>(method: string, args: CalldataEncodable[] = []): Promise<T | null> {
   if (!(await isContractLive())) return null;
   try {
     const c = client();
@@ -67,7 +68,7 @@ export async function getClaimable(address: string): Promise<string> {
 export async function submitWrite(opts: {
   account: `0x${string}`;
   functionName: string;
-  args: unknown[];
+  args: CalldataEncodable[];
   value?: bigint;
 }): Promise<string> {
   if (!(await isContractLive())) {
