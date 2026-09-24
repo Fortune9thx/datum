@@ -2,8 +2,8 @@
 
 DATUM settles one question on-chain: did a named instrument at a named official station, over a locked window, clear a locked threshold?
 
-**Live URL:** not yet deployed -- see [docs/STATUS.md](docs/STATUS.md) for exact readiness state and blockers.
-**Contract address:** not yet deployed (Studio Dev, chain id 61997) -- see [docs/STATUS.md](docs/STATUS.md).
+**Live URL:** https://datum-gamma.vercel.app (frontend shell only -- contract not yet deployed, so it fails closed).
+**Contract address:** not yet deployed (Studio Dev, chain id 61997) -- see [docs/STATUS.md](docs/STATUS.md) for exact readiness state and blockers.
 
 > "Official station observation at locked publishers for this window."
 
