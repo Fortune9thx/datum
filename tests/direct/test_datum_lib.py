@@ -593,3 +593,55 @@ class TestPagination:
         items = list(range(200))
         page, _ = lib.paginate(items, cursor=0, limit=10_000)
         assert len(page) == lib.MAX_PAGE_SIZE
+
+
+class TestAdjudicationPrompt:
+    """Covers the depth={('any' if not None else 'any')} bug fix: a locked
+    QUAKES depth must actually reach the built prompt text (it was
+    previously always rendered as "any" regardless of the constitution's
+    stored depth), and the prompt's requested JSON shape must ask for
+    lat/lon on QUAKES since validate_source_reading() requires an
+    epicenter to check bbox membership."""
+
+    def _quakes_kwargs(self, **overrides):
+        kwargs = dict(
+            instrument_class="QUAKES",
+            station_id=None,
+            bbox=[-122.6, 37.2, -121.7, 38.0],
+            depth=None,
+            window=(1_800_010_800, 1_800_014_400),
+            policy="FINAL_ONLY",
+            publishers=["USGS_QUAKE", "EMSC"],
+            event_id="1",
+        )
+        kwargs.update(overrides)
+        return kwargs
+
+    def test_non_default_depth_is_present_in_prompt(self):
+        prompt = lib._adjudication_prompt(**self._quakes_kwargs(depth=10.0))
+        assert "depth=10.0 km" in prompt
+
+    def test_default_depth_renders_as_any_not_a_literal_none_check(self):
+        prompt = lib._adjudication_prompt(**self._quakes_kwargs(depth=None))
+        assert "depth=any" in prompt
+
+    def test_quakes_prompt_requests_lat_lon_for_bbox_membership(self):
+        prompt = lib._adjudication_prompt(**self._quakes_kwargs())
+        assert '"lat"' in prompt
+        assert '"lon"' in prompt
+
+    def test_non_quakes_prompt_has_no_depth_or_bbox_fields(self):
+        prompt = lib._adjudication_prompt(
+            instrument_class="STAGE",
+            station_id="01646500",
+            bbox=None,
+            depth=None,
+            window=(1_800_010_800, 1_800_014_400),
+            policy="FINAL_ONLY",
+            publishers=["USGS_WATER", "NOAA_NWPS"],
+            event_id="1",
+        )
+        assert "depth=" not in prompt
+        assert '"lat"' not in prompt
+        assert '"lon"' not in prompt
+        assert "official station id 01646500" in prompt

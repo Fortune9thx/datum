@@ -323,6 +323,7 @@ class Datum(gl.Contract):
         instrument_class = rec["class"]
         station_id = rec["station_id"]
         bbox = rec["bbox"]
+        depth = rec.get("depth")
         window = tuple(rec["window"])
         policy = rec["product_status_policy"]
         publishers = list(rec["publishers"])
@@ -334,6 +335,7 @@ class Datum(gl.Contract):
                     instrument_class=instrument_class,
                     station_id=station_id,
                     bbox=bbox,
+                    depth=depth,
                     window=window,
                     policy=policy,
                     publishers=publishers,
@@ -784,37 +786,3 @@ class Datum(gl.Contract):
         page_ids, next_cursor = paginate(ids, int(cursor), int(limit))
         rows = [json.loads(self.events[eid]) for eid in page_ids]
         return json.dumps({"rows": rows, "next_cursor": next_cursor})
-
-
-def _adjudication_prompt(
-    *, instrument_class, station_id, bbox, window, policy, publishers, event_id
-) -> str:
-    """Frozen prompt template. The model is instructed to return ONLY the
-    structured JSON envelope described in datum_lib's module docstring --
-    it never returns a bare YES/NO or an amount as a trusted value; code
-    (evaluate_envelope) independently re-derives and validates every field
-    before anything is accepted."""
-    subject = (
-        f"bbox {bbox} (depth={('any' if not None else 'any')})"
-        if instrument_class == "QUAKES"
-        else f"official station id {station_id}"
-    )
-    return (
-        "You are retrieving OFFICIAL, COMPLETED (never forecast) observation "
-        f"data for instrument class {instrument_class} at {subject}, for the "
-        f"locked window [{window[0]}, {window[1]}) (Unix chain time), from "
-        f"ONLY these locked publishers: {publishers}. Product status policy: "
-        f"{policy}.\n\n"
-        "Return ONLY a single JSON object with this exact shape (no prose):\n"
-        '{"event_id": "' + str(event_id) + '", "sources": {"<publisher>": '
-        '{"usable": true|false, "station_id": "...", "t": <unix int>, '
-        '"value_native": <number>, "unit": "...", "product_status": '
-        '"FINAL"|"PRELIMINARY", "converted": <number>, "reason": null|"..."}}, '
-        '"verdict": "YES"|"NO"|"INCONCLUSIVE", "code": "CLEAR"|"MISSING"|'
-        '"CONFLICT"|"PRELIMINARY_BLOCKED"}\n\n'
-        "If a publisher's page is unreachable, wrong station, outside the "
-        "window, a forecast product, or PRELIMINARY under a FINAL_ONLY "
-        "policy, set that source's usable=false with a reason string and "
-        "never impute a value. This proposed verdict/code is advisory only "
-        "-- the caller re-derives and validates it independently."
-    )

@@ -314,6 +314,21 @@ def paginate(items: list, cursor: int, limit: int) -> tuple[list, int | None]:
     next_cursor = cursor + limit if cursor + limit < len(items) else None
     return (page, next_cursor)
 
+def _adjudication_prompt(*, instrument_class, station_id, bbox, depth, window, policy, publishers, event_id) -> str:
+    is_quakes = instrument_class == 'QUAKES'
+    if is_quakes:
+        depth_label = 'any' if depth is None else f'{depth} km'
+        subject = f'bbox {bbox} (depth={depth_label})'
+    else:
+        subject = f'official station id {station_id}'
+    if is_quakes:
+        source_shape = '{"usable": true|false, "station_id": "...", "t": <unix int>, "value_native": <number>, "unit": "...", "product_status": "FINAL"|"PRELIMINARY", "converted": <number>, "reason": null|"...", "lat": <number>, "lon": <number>}}, '
+        depth_instruction = ' Include each source\'s epicenter as "lat" and "lon" (decimal degrees, WGS84) so membership inside the locked bbox can be checked.'
+    else:
+        source_shape = '{"usable": true|false, "station_id": "...", "t": <unix int>, "value_native": <number>, "unit": "...", "product_status": "FINAL"|"PRELIMINARY", "converted": <number>, "reason": null|"..."}}, '
+        depth_instruction = ''
+    return f'You are retrieving OFFICIAL, COMPLETED (never forecast) observation data for instrument class {instrument_class} at {subject}, for the locked window [{window[0]}, {window[1]}) (Unix chain time), from ONLY these locked publishers: {publishers}. Product status policy: {policy}.{depth_instruction}\n\nReturn ONLY a single JSON object with this exact shape (no prose):\n{{"event_id": "' + str(event_id) + '", "sources": {"<publisher>": ' + source_shape + '"verdict": "YES"|"NO"|"INCONCLUSIVE", "code": "CLEAR"|"MISSING"|"CONFLICT"|"PRELIMINARY_BLOCKED"}\n\nIf a publisher\'s page is unreachable, wrong station, outside the window, a forecast product, or PRELIMINARY under a FINAL_ONLY policy, set that source\'s usable=false with a reason string and never impute a value. This proposed verdict/code is advisory only -- the caller re-derives and validates it independently.'
+
 def _now_ts() -> int:
     return int(datetime.now(timezone.utc).timestamp())
 
@@ -506,13 +521,14 @@ class Datum(gl.Contract):
         instrument_class = rec['class']
         station_id = rec['station_id']
         bbox = rec['bbox']
+        depth = rec.get('depth')
         window = tuple(rec['window'])
         policy = rec['product_status_policy']
         publishers = list(rec['publishers'])
         event_id_local = event_id
 
         def leader_fn() -> str:
-            envelope = gl.nondet.exec_prompt(_adjudication_prompt(instrument_class=instrument_class, station_id=station_id, bbox=bbox, window=window, policy=policy, publishers=publishers, event_id=event_id_local))
+            envelope = gl.nondet.exec_prompt(_adjudication_prompt(instrument_class=instrument_class, station_id=station_id, bbox=bbox, depth=depth, window=window, policy=policy, publishers=publishers, event_id=event_id_local))
             return envelope
 
         def validator_fn(leader_result) -> bool:
@@ -796,7 +812,3 @@ class Datum(gl.Contract):
         page_ids, next_cursor = paginate(ids, int(cursor), int(limit))
         rows = [json.loads(self.events[eid]) for eid in page_ids]
         return json.dumps({'rows': rows, 'next_cursor': next_cursor})
-
-def _adjudication_prompt(*, instrument_class, station_id, bbox, window, policy, publishers, event_id) -> str:
-    subject = f"bbox {bbox} (depth={('any' if not None else 'any')})" if instrument_class == 'QUAKES' else f'official station id {station_id}'
-    return f'You are retrieving OFFICIAL, COMPLETED (never forecast) observation data for instrument class {instrument_class} at {subject}, for the locked window [{window[0]}, {window[1]}) (Unix chain time), from ONLY these locked publishers: {publishers}. Product status policy: {policy}.\n\nReturn ONLY a single JSON object with this exact shape (no prose):\n{{"event_id": "' + str(event_id) + '", "sources": {"<publisher>": {"usable": true|false, "station_id": "...", "t": <unix int>, "value_native": <number>, "unit": "...", "product_status": "FINAL"|"PRELIMINARY", "converted": <number>, "reason": null|"..."}}, "verdict": "YES"|"NO"|"INCONCLUSIVE", "code": "CLEAR"|"MISSING"|"CONFLICT"|"PRELIMINARY_BLOCKED"}\n\nIf a publisher\'s page is unreachable, wrong station, outside the window, a forecast product, or PRELIMINARY under a FINAL_ONLY policy, set that source\'s usable=false with a reason string and never impute a value. This proposed verdict/code is advisory only -- the caller re-derives and validates it independently.'

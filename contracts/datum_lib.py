@@ -691,3 +691,72 @@ def paginate(items: list, cursor: int, limit: int) -> tuple[list, int | None]:
     page = items[cursor : cursor + limit]
     next_cursor = cursor + limit if (cursor + limit) < len(items) else None
     return page, next_cursor
+
+
+# ---------------------------------------------------------------------------
+# Adjudication prompt -- pure string-building, zero genlayer imports, so it
+# is directly plain-pytest testable (see test_datum_lib.py). Datum.py's
+# adjudicate() calls this with plain local values only; it never touches
+# gl.* itself.
+# ---------------------------------------------------------------------------
+
+
+def _adjudication_prompt(
+    *, instrument_class, station_id, bbox, depth, window, policy, publishers, event_id
+) -> str:
+    """Frozen prompt template. The model is instructed to return ONLY the
+    structured JSON envelope described in this module's docstring -- it
+    never returns a bare YES/NO or an amount as a trusted value;
+    evaluate_envelope() independently re-derives and validates every field
+    before anything is accepted.
+
+    For QUAKES, the constitution's locked depth (if any) is surfaced in the
+    prompt text, and the requested JSON shape adds "lat"/"lon" so
+    validate_source_reading()'s bbox-membership check (which requires an
+    epicenter) can actually be satisfied by what the model returns.
+    """
+    is_quakes = instrument_class == "QUAKES"
+    if is_quakes:
+        depth_label = "any" if depth is None else f"{depth} km"
+        subject = f"bbox {bbox} (depth={depth_label})"
+    else:
+        subject = f"official station id {station_id}"
+
+    if is_quakes:
+        source_shape = (
+            '{"usable": true|false, "station_id": "...", "t": <unix int>, '
+            '"value_native": <number>, "unit": "...", "product_status": '
+            '"FINAL"|"PRELIMINARY", "converted": <number>, "reason": null|"...", '
+            '"lat": <number>, "lon": <number>}}, '
+        )
+        depth_instruction = (
+            ' Include each source\'s epicenter as "lat" and "lon" (decimal '
+            "degrees, WGS84) so membership inside the locked bbox can be "
+            "checked."
+        )
+    else:
+        source_shape = (
+            '{"usable": true|false, "station_id": "...", "t": <unix int>, '
+            '"value_native": <number>, "unit": "...", "product_status": '
+            '"FINAL"|"PRELIMINARY", "converted": <number>, "reason": null|"..."}}, '
+        )
+        depth_instruction = ""
+
+    return (
+        "You are retrieving OFFICIAL, COMPLETED (never forecast) observation "
+        f"data for instrument class {instrument_class} at {subject}, for the "
+        f"locked window [{window[0]}, {window[1]}) (Unix chain time), from "
+        f"ONLY these locked publishers: {publishers}. Product status policy: "
+        f"{policy}.{depth_instruction}\n\n"
+        "Return ONLY a single JSON object with this exact shape (no prose):\n"
+        '{"event_id": "' + str(event_id) + '", "sources": {"<publisher>": '
+        + source_shape +
+        '"verdict": "YES"|"NO"|"INCONCLUSIVE", "code": "CLEAR"|"MISSING"|'
+        '"CONFLICT"|"PRELIMINARY_BLOCKED"}\n\n'
+        "If a publisher's page is unreachable, wrong station, outside the "
+        "window, a forecast product, or PRELIMINARY under a FINAL_ONLY "
+        "policy, set that source's usable=false with a reason string and "
+        "never impute a value. This proposed verdict/code is advisory only "
+        "-- the caller re-derives and validates it independently."
+    )
+
