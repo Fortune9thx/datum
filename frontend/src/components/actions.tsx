@@ -50,7 +50,7 @@ export function ActionButton({
     setResult(null);
     try {
       const hash = await run();
-      setResult({ ok: true, text: `submitted: ${hash}` });
+      setResult({ ok: true, text: `confirmed: ${hash}` });
     } catch (err) {
       setResult({ ok: false, text: err instanceof Error ? err.message : String(err) });
     } finally {
@@ -66,7 +66,7 @@ export function ActionButton({
         title={reason ?? label}
         onClick={() => void onClick()}
       >
-        {busy ? "submitting…" : label}
+        {busy ? "waiting for consensus…" : label}
       </button>
       {result ? (
         <span

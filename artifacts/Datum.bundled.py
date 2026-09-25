@@ -399,7 +399,7 @@ class Datum(gl.contract.Contract):
     treasury: str
 
     def __init__(self, treasury: str):
-        self.treasury = treasury
+        self.treasury = Address(treasury).as_hex
 
     def _load_event(self, event_id: str) -> dict:
         raw = self.events.get(event_id)
@@ -778,7 +778,7 @@ class Datum(gl.contract.Contract):
     @gl.public.view
     def get_position(self, event_id: str, address: str) -> str:
         rec = self._load_event(event_id)
-        addr = address
+        addr = Address(address).as_hex
         side = None
         stake = None
         if addr == rec['creator']:
@@ -789,7 +789,8 @@ class Datum(gl.contract.Contract):
 
     @gl.public.view
     def get_positions(self, address: str, cursor: u256, limit: u256) -> str:
-        raw = self.address_events.get(address)
+        addr = Address(address).as_hex
+        raw = self.address_events.get(addr)
         ids = json.loads(raw) if raw else []
         page_ids, next_cursor = paginate(ids, int(cursor), int(limit))
         rows = []
@@ -797,21 +798,23 @@ class Datum(gl.contract.Contract):
             rec = json.loads(self.events[eid])
             side = None
             stake = None
-            if address == rec['creator']:
+            if addr == rec['creator']:
                 side, stake = (rec['creator_side'], rec['creator_stake'])
-            elif address == rec.get('acceptor'):
+            elif addr == rec.get('acceptor'):
                 side, stake = (rec['acceptor_side'], rec['acceptor_stake'])
             rows.append({'event_id': eid, 'side': side, 'stake': stake, 'state': rec['state']})
         return json.dumps({'rows': rows, 'next_cursor': next_cursor})
 
     @gl.public.view
     def get_claimable(self, address: str, cursor: u256, limit: u256) -> str:
-        owed = int(self.claimable.get(address, u256(0)))
-        return json.dumps({'address': address, 'claimable': str(owed)})
+        addr = Address(address).as_hex
+        owed = int(self.claimable.get(addr, u256(0)))
+        return json.dumps({'address': addr, 'claimable': str(owed)})
 
     @gl.public.view
     def get_activity(self, address: str, cursor: u256, limit: u256) -> str:
-        raw = self.address_events.get(address)
+        addr = Address(address).as_hex
+        raw = self.address_events.get(addr)
         ids = json.loads(raw) if raw else []
         page_ids, next_cursor = paginate(ids, int(cursor), int(limit))
         rows = [json.loads(self.events[eid]) for eid in page_ids]

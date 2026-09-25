@@ -137,6 +137,13 @@ export async function getClaimableWei(address: string): Promise<string> {
  * and the SDK does not fill one in on its own (the same root cause behind
  * the CLI deploy's earlier FeeValueMustBeNonZero wall -- see
  * docs/deployment.md).
+ *
+ * writeContract() itself only confirms the transaction was BROADCAST, not
+ * that it executed successfully -- a call can still revert during consensus
+ * (e.g. a UserError the contract raises) after a hash comes back. Waiting
+ * here for the receipt to reach "decided" and checking its execution result
+ * before returning means the caller never presents a reverted write as a
+ * success.
  */
 export async function submitWrite(opts: {
   account: `0x${string}`;
@@ -165,6 +172,19 @@ export async function submitWrite(opts: {
       value,
       fees,
     });
+    const receipt = await c.waitForTransactionReceipt({
+      hash,
+      waitUntil: "decided",
+      retries: 60,
+      interval: 3000,
+    });
+    if (receipt.txExecutionResultName !== "FINISHED_WITH_RETURN") {
+      throw new Error(
+        `Transaction did not succeed (status: ${receipt.statusName ?? "unknown"}, result: ${
+          receipt.txExecutionResultName ?? "unknown"
+        }).`
+      );
+    }
     return String(hash);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

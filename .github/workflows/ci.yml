@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  contract:
+    name: Contract lint + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install toolchain
+        run: pip install genlayer-test==0.30.0rc2 genvm-linter==0.11.1rc2 pytest
+
+      - name: Unit tests (contracts/datum_lib.py, zero genlayer imports)
+        run: python -m pytest tests/direct/test_datum_lib.py -q
+
+      - name: Build the deployable bundle
+        run: python scripts/build_bundle.py
+
+      - name: gltest direct-mode (real GenVM sandbox)
+        run: python -m pytest tests/direct/test_datum_contract.py -q
+
+      - name: Rebuild the bundle
+        # gltest clears artifacts/ at session start, so the bundle from the
+        # step above no longer exists once the tests above have run.
+        run: python scripts/build_bundle.py
+
+      - name: genvm-lint check
+        run: genvm-lint check artifacts/Datum.bundled.py
+        env:
+          PYTHONIOENCODING: utf-8
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+      - run: npm run build

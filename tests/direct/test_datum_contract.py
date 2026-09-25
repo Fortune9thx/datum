@@ -45,6 +45,20 @@ CREATE_BOND = 5 * 10**16  # 0.05 GEN, must match datum_lib.CREATE_BOND
 ADJUDICATE_BOND = 2 * 10**16  # 0.02 GEN, must match datum_lib.ADJUDICATE_BOND
 
 
+def _hex(addr) -> str:
+    """gltest's `direct_owner` fixture (unlike `direct_alice`/`direct_bob`,
+    which are only ever touched after a deploy has already run) resolves
+    before genlayer.py.types is importable and silently falls back to a
+    raw 20-byte `bytes` object instead of a real Address -- str() on that
+    then gives Python's b'...' bytes repr, not hex. Route every address
+    fixture through this so the value used as a contract-facing address
+    string is always real "0x..." hex, matching what a real wallet sends."""
+    s = str(addr)
+    if s.startswith("0x") and len(s) == 42:
+        return s
+    return "0x" + bytes(addr).hex()
+
+
 def _precip_constitution(**overrides):
     payload = {
         "class": "STATION_PRECIP",
@@ -72,7 +86,7 @@ def contract(direct_deploy, direct_owner):
     # "Depends": "py-genlayer:..." header (see line 1 of contracts/Datum.py).
     # treasury is a required constructor arg (see contracts/Datum.py) --
     # direct_owner stands in for the deployer address tests use throughout.
-    return direct_deploy(CONTRACT_PATH, str(direct_owner), sdk_version="v0.6.0-rc6")
+    return direct_deploy(CONTRACT_PATH, _hex(direct_owner), sdk_version="v0.6.0-rc6")
 
 
 class TestCreateAcceptHappyPath:
@@ -272,7 +286,7 @@ class TestAppealBondResolution:
     ):
         event_id = self._create_accept_adjudicate(contract, direct_vm, direct_alice, direct_bob)
 
-        treasury_before = json.loads(contract.get_claimable(address=str(direct_owner), cursor=0, limit=1))
+        treasury_before = json.loads(contract.get_claimable(address=_hex(direct_owner), cursor=0, limit=1))
         assert int(treasury_before["claimable"]) == 0
 
         with direct_vm.prank(direct_bob):
@@ -295,7 +309,7 @@ class TestAppealBondResolution:
         direct_vm.warp("2027-01-15T18:10:00Z")
         contract.finalize(event_id=event_id)
 
-        treasury_after = json.loads(contract.get_claimable(address=str(direct_owner), cursor=0, limit=1))
+        treasury_after = json.loads(contract.get_claimable(address=_hex(direct_owner), cursor=0, limit=1))
         # The forfeited appeal bond, PLUS the ordinary 2% protocol fee's
         # treasury share (half of FEE_BPS of the pot) that every decisive
         # settle credits regardless of any appeal (decisive_fee() in
@@ -347,7 +361,7 @@ class TestAppealBondResolution:
         direct_vm.warp("2027-01-15T18:10:00Z")
         contract.finalize(event_id=event_id)
 
-        treasury_after = json.loads(contract.get_claimable(address=str(direct_owner), cursor=0, limit=1))
+        treasury_after = json.loads(contract.get_claimable(address=_hex(direct_owner), cursor=0, limit=1))
         assert int(treasury_after["claimable"]) == 0
 
         bob_claimable = json.loads(contract.get_claimable(address=str(direct_bob), cursor=0, limit=1))
@@ -448,7 +462,7 @@ class TestExpireEvent:
         assert int(alice_after["claimable"]) == STAKE
 
         treasury_after = json.loads(
-            contract.get_claimable(address=str(direct_owner), cursor=0, limit=1)
+            contract.get_claimable(address=_hex(direct_owner), cursor=0, limit=1)
         )
         assert int(treasury_after["claimable"]) == CREATE_BOND
 
@@ -620,7 +634,7 @@ class TestLapseAppeal:
         assert event["appeal"] is None
 
         treasury_after = json.loads(
-            contract.get_claimable(address=str(direct_owner), cursor=0, limit=1)
+            contract.get_claimable(address=_hex(direct_owner), cursor=0, limit=1)
         )
         assert int(treasury_after["claimable"]) == bond
 
