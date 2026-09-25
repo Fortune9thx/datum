@@ -106,11 +106,13 @@ by `genvm-lint lint` and the bundler's own size check below.
 
 ## Local toolchain: what actually happened (real captured output)
 
-This machine has a pre-existing, long-standing gap affecting
+This machine has a long-documented, cross-project history of
 `genvm-lint`'s runtime-dependent commands and `gltest`'s direct-mode
-deploy, documented across every prior GenLayer project built on this
-machine. DATUM hits the exact same wall. Below is the real, current
-evidence for THIS project (not inherited/assumed from prior projects).
+deploy failing with `name 'gl' is not defined`, assumed to be a
+persistent local gap. **On this project, that assumption turned out to
+be wrong.** It was three real, stacked, fixable bugs producing the same
+generic symptom every time -- see CHANGELOG.md's 1.1.2 entry for the full
+technical writeup. Below is the current, real, all-green evidence.
 
 ### 1. `genvm-lint lint` -- PASSES
 
@@ -124,55 +126,53 @@ $ PYTHONIOENCODING=utf-8 genvm-lint lint artifacts/Datum.bundled.py
 Lint passed (3 checks)
 ```
 
-(`PYTHONIOENCODING=utf-8` is required only because this Windows console's
-default `cp1252` codec can't print the tool's own checkmark character --
-an unrelated, separately-observed Windows console encoding issue, not a
-GenLayer toolchain problem.)
-
-### 2. `genvm-lint check` / `validate` / `schema` -- FAIL
-
-These commands actually try to load and execute the contract module
-against a GenVM runner bundle. All three fail identically:
+### 2. `genvm-lint check` / `validate` / `schema` -- PASS
 
 ```
 $ PYTHONIOENCODING=utf-8 genvm-lint check artifacts/Datum.bundled.py
-Warning: could not resolve latest GenVM version from genlayerlabs/genvm-manager
-  (HTTP Error 403: rate limit exceeded); checking the local cache
-
 Lint passed (3 checks)
-Validation failed
-  Failed to load contract: name gl is not defined
+Validation passed
+  Contract: Datum
+  Methods: 22 (10 view, 12 write)
+
+$ PYTHONIOENCODING=utf-8 genvm-lint schema artifacts/Datum.bundled.py
+Contract: Datum
+Constructor (0 params):
+Methods (22):
+  - accept_event(event_id, side) [write]
+  - adjudicate(event_id) [write]
+  - appeal(event_id, ground) [write]
+  ... (all 22, 10 view / 12 write, matching section 5 of README.md)
 ```
 
-`schema` produces the identical "Failed to load contract" failure.
-
-### 3. `gltest` direct-mode deploy -- FAILS (different, earlier failure point)
-
-`tests/direct/test_datum_contract.py` is written and would exercise the
-real create/accept/adjudicate/claim flow, but its `contract` fixture
-cannot get past `direct_deploy(...)`:
+### 3. `gltest` direct-mode deploy -- PASSES, real execution proof
 
 ```
-$ gltest tests/direct/test_datum_contract.py -q
-...
-Downloading https://github.com/genlayerlabs/genvm-manager/releases/download/v0.3.0/genvm-runners-all.tar.xz...
-Downloading https://github.com/genlayerlabs/genvm-manager/releases/download/v0.3.0/genvm-universal.tar.xz...
-E   FileNotFoundError: No GenVM runner bundle for v0.3.0; tried genvm-runners-all.tar.xz, genvm-universal.tar.xz
+$ python -m pytest tests/direct/test_datum_contract.py -q
+.........                                                                [100%]
+9 passed in 5.89s
 ```
 
-The same failure occurs for `sdk_version=v0.3.0-rc7` and
-`sdk_version=v0.2.16` (the latter has a *cached* tarball under
-`~/.cache/gltest-direct/genvm-universal-v0.2.16.tar.xz` from a prior
-project, but gltest's own resolution logic did not pick it up for this
-run -- not investigated further, out of scope for this session).
+This deploys `artifacts/Datum.bundled.py` into a real GenVM sandbox
+(rebuilding the bundle itself first, since gltest clears its own
+`artifacts/` cache directory -- a same-name coincidence with the
+bundler's output dir, not related to the fix above) and exercises:
+create_event (real GEN attached via `direct_vm.value`), get_constitution
++ hash freeze, accept_event from a second account
+(`direct_vm.prank(direct_bob)`) moving the event to ACTIVE, three
+create-time refusals (below-min-window, single-publisher,
+below-min-lead), a stranger being unable to double-accept, cancel_event
+restricted to the creator, and adjudicate correctly refusing before the
+window closes. This is a genuine execution proof against real GenVM
+storage/event/contract-class wiring, not a mock of the contract's own
+logic -- `contracts/datum_lib.py`'s unit tests (below) already cover the
+pure logic in isolation; this proves the `gl.Contract` glue around it
+actually works on this pinned runner.
 
-**Root cause, as far as this session could observe it:** GitHub API rate
-limiting (explicitly reported by `genvm-lint`'s own warning above) is
-blocking runner-bundle resolution/download for `gltest` and
-`genvm-lint`'s runtime-dependent commands alike. This matches the
-long-standing, cross-project "genvm-lint / gltest broken locally" gap
-already on file for this machine, and is separate from (see above) the
-FeeManager-side revert blocking the hosted deploy path.
+`genlayer up` (the full Docker-based localnet simulator, a different
+path than `gltest` direct-mode) was not attempted -- this machine has no
+Docker installed. `gltest` direct-mode is a real, if narrower, substitute
+that does not need it. See `docs/localnet.md`.
 
 ### 4. Primary verified coverage -- `contracts/datum_lib.py` unit tests
 
