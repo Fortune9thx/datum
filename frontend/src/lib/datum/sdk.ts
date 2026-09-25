@@ -129,6 +129,14 @@ export async function getClaimableWei(address: string): Promise<string> {
  * Thin write wrapper. Requires an injected wallet -- this SDK never holds or
  * accepts a private key. Throws a describeUserError()-mapped Error on any
  * contract-side UserError.
+ *
+ * Fees are estimated explicitly via estimateTransactionFeesForWrite() and
+ * passed through to writeContract(). Letting writeContract() fall back to
+ * its own default reverts every call with FeeValueMustBeNonZero -- the
+ * network requires a complete fee distribution, not just a nonzero value,
+ * and the SDK does not fill one in on its own (the same root cause behind
+ * the CLI deploy's earlier FeeValueMustBeNonZero wall -- see
+ * docs/deployment.md).
  */
 export async function submitWrite(opts: {
   account: `0x${string}`;
@@ -141,11 +149,21 @@ export async function submitWrite(opts: {
   }
   try {
     const c = signingClient(opts.account);
-    const hash = await c.writeContract({
-      address: CONTRACT_ADDRESS as `0x${string}`,
+    const address = CONTRACT_ADDRESS as `0x${string}`;
+    const args = opts.args ?? [];
+    const value = opts.value ?? 0n;
+    const fees = await c.estimateTransactionFeesForWrite({
+      address,
       functionName: opts.functionName,
-      args: opts.args ?? [],
-      value: opts.value ?? 0n,
+      args,
+      value,
+    });
+    const hash = await c.writeContract({
+      address,
+      functionName: opts.functionName,
+      args,
+      value,
+      fees,
     });
     return String(hash);
   } catch (err: unknown) {
