@@ -3,8 +3,8 @@ Pure-Python unit tests for contracts/datum_lib.py.
 
 datum_lib.py has ZERO genlayer imports, so these run with plain pytest --
 no gltest, no genvm runtime, no toolchain dependency. This is DATUM's
-primary verified coverage (see docs/STATUS.md for why gltest/genvm-lint are
-blocked locally on this machine).
+primary verified coverage, independent of the local gltest/genvm-lint
+toolchain (see docs/testing.md).
 """
 
 import json
@@ -654,13 +654,13 @@ class TestAdjudicationPrompt:
 # envelope would say) and the two independently-derived outcomes are
 # compared. gltest direct-mode cannot inject two different LLM response
 # bodies for the same mocked prompt pattern (mock_llm() matches in
-# registration order and returns the FIRST match for a repeated pattern --
-# see tests/direct/conftest.py and project memory), so this exact
-# comparison -- the actual on-chain defense -- is tested here at the
-# datum_lib level instead. This does NOT prove genuine multi-validator
-# network disagreement (see docs/localnet.md); it proves the comparator
-# ITSELF correctly rejects when given two genuinely different envelopes,
-# which is the whole of what code can verify without a real network.
+# registration order and returns the first match for a repeated pattern --
+# see tests/direct/conftest.py), so this exact comparison -- the actual
+# on-chain defense -- is tested here at the datum_lib level instead. This
+# does NOT prove genuine multi-validator network disagreement (see
+# docs/testing.md); it proves the comparator ITSELF correctly rejects when
+# given two genuinely different envelopes, which is the whole of what code
+# can verify without a real network.
 # ---------------------------------------------------------------------------
 
 

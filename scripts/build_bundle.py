@@ -4,14 +4,10 @@ Bundles contracts/datum_lib.py's content into contracts/Datum.py to produce
 artifacts/Datum.bundled.py -- the ONE file Studio actually receives (sibling
 imports fail Studio's contract validation).
 
-Pattern follows the single-file-deploy bundler used across every prior
-GenLayer project on this machine (see e.g.
-C:\\Users\\HP\\Desktop\\precedence-settler\\scripts\\deploy.mjs and sibling
-projects' build_bundle.py for the established convention): read the pure
-logic module's source, strip its own module docstring/imports that the
-target file doesn't need duplicated, and inline the remainder between two
-marker comments in the deployable file, then write out a fresh bundle
-artifact -- never hand-edit the generated file.
+Reads the pure logic module's source, strips its own module docstring and
+imports that the target file doesn't need duplicated, and inlines the
+remainder between two marker comments in the deployable file, then writes
+out a fresh bundle artifact -- never hand-edit the generated file.
 
 Usage: python scripts/build_bundle.py
 Output: artifacts/Datum.bundled.py
@@ -69,7 +65,7 @@ class _DocstringStripper(ast.NodeTransformer):
 
     def _strip_body(self, body: list) -> list:
         new_body = []
-        for i, node in enumerate(body):
+        for node in body:
             if (
                 isinstance(node, ast.Expr)
                 and isinstance(node.value, ast.Constant)

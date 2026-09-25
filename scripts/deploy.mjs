@@ -1,10 +1,7 @@
-// DATUM deploy script -- Studio Dev (chain 61997) ONLY.
+// DATUM deploy script -- Studio Next (chain 61997) only.
 //
-// NOT RUN as part of this build. Per the owner's handoff instructions, no
-// on-chain deploy was attempted in this session. This script is provided
-// so the user can run it themselves once they have a funded Studio Dev
-// keystore. See docs/STATUS.md for the exact commands and the known
-// genlayer-studio#1757 hosted-deploy risk on Studio Dev.
+// See docs/deployment.md for the current deployed address and the
+// `genlayer deploy` CLI command this script's own logic mirrors.
 //
 // Usage:
 //   DATUM_KEYSTORE_PATH=... DATUM_KEYSTORE_PASSWORD=... node scripts/deploy.mjs

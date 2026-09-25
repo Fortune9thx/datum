@@ -449,11 +449,7 @@ class Datum(gl.contract.Contract):
         # CREATE_BOND is only ever at risk of slashing via expire_event()
         # (window opened with no acceptor). Once an event reaches _settle()
         # at all, an acceptor existed -- the creator held up their end, so
-        # their bond returns here regardless of the eventual verdict. Not
-        # returning it here (an earlier version of this contract never
-        # touched create_bond outside cancel_event/expire_event) would
-        # strand it on every single successfully-settled event, the normal
-        # case, not an edge case.
+        # their bond returns here regardless of the eventual verdict.
         if not rec.get("create_bond_slashed"):
             self._credit(creator, rec["create_bond"])
 

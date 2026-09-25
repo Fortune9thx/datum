@@ -13,26 +13,9 @@ handle still has open -- fd 0 still points at it via dup2 -- so this
 raises PermissionError (WinError 32) on every direct-mode contract deploy.
 
 This is an upstream bug in the test library, not in the contract under
-test (same shim used across every prior GenLayer project on this machine,
-e.g. authorization-proof-settler/tests/direct/conftest.py). We patch
-os.unlink to swallow exactly that failure so test collection can proceed;
-the OS actually deletes the temp file once fd 0 is closed/reused at
-process exit.
-
-A DEEPER failure ("name 'gl' is not defined" / genvm-lint validate/schema
-failing the same way) was previously assumed to be a long-standing,
-unresolved local toolchain gap. It turned out to be three real, fixable
-things instead, once actually debugged end-to-end on this project: (1) the
-contract used a stale pre-v0.3.0 genlayer import/API pattern
-(`from genlayer import *`, bare `gl.Contract`/`gl.Event`,
-`gl.vm.run_nondet_unsafe`), (2) `__init__` hand-instantiated its TreeMap
-fields instead of letting the storage generator auto-allocate them, and
-(3) gltest's own `artifacts/` cache directory collided by name with this
-project's bundle output directory and gltest clears it at session start.
-See docs/STATUS.md and CHANGELOG.md for the full writeup -- gltest direct-
-mode deploy and a real create/accept/cancel/adjudicate-guard flow all pass
-end-to-end on this contract now. This shim's own fix (Windows os.unlink)
-remains necessary and unrelated to any of that.
+test. We patch os.unlink to swallow exactly that failure so test
+collection can proceed; the OS actually deletes the temp file once fd 0
+is closed/reused at process exit.
 """
 
 import os
@@ -63,9 +46,7 @@ os.unlink = _tolerant_unlink
 # outright ("text result is not a string"), so a JSON-shaped mock_llm()
 # response never reaches the contract at all as things stand.
 #
-# This is a test-harness gap, not a contract bug (matches this project's
-# real create/accept/adjudicate flow, and the same mock quirk this
-# codebase has documented before under a different SDK generation). Patch
+# This is a test-harness gap, not a contract bug. Patch
 # _handle_llm_request to keep the literal string DATUM's own adjudicate()
 # actually expects, instead of auto-decoding it.
 # ---------------------------------------------------------------------------

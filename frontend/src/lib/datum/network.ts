@@ -38,14 +38,9 @@ export type LiveStatus =
 /**
  * Liveness probe. Uses `gen_getContractSchema`, NOT `eth_getCode`.
  *
- * This matters and was a real bug: a GenLayer intelligent contract is not
- * an EVM contract, so `eth_getCode` returns `0x` for a perfectly live,
- * deployed, responding contract. An earlier version of this probe used
- * `eth_getCode` and would therefore have reported `no-code` (i.e. "Studio
- * Next was reset, redeploy") for a contract that was actually live and
- * answering view calls -- verified against the real deployed address on
- * 2026-09-25, which returns `"result":"0x"` from `eth_getCode` while
- * `gen_getContractSchema` returns its full method schema.
+ * A GenLayer intelligent contract is not an EVM contract, so `eth_getCode`
+ * always returns `0x` -- including for a perfectly live, deployed,
+ * responding contract -- and cannot distinguish "live" from "reset".
  *
  * `gen_getContractSchema` cleanly separates the states we need: a schema
  * for a live contract, JSON-RPC error -32001 ("Contract ... not found")

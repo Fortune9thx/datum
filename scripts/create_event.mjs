@@ -1,19 +1,13 @@
-// DATUM create_event smoke test -- Studio Next (chain 61997) ONLY.
+// DATUM create_event -- Studio Next (chain 61997) only.
 //
-// The `genlayer` CLI's `write` command hardcodes `value: 0n` with no flag
-// to override it (confirmed by reading node_modules/genlayer/dist/index.js's
-// WriteAction class), so it cannot call ANY payable method, including
-// create_event. This script uses the genlayer-js SDK directly instead --
-// the same pattern scripts/deploy.mjs already uses, which is what actually
-// deployed this contract (0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3).
+// The `genlayer` CLI's `write` command cannot attach GEN to a payable
+// call (its WriteAction hardcodes value: 0n), so payable methods must go
+// through genlayer-js directly, as this script does.
 //
-// Constitution below is built from this contract's OWN live get_registry()/
-// get_config() output (read 2026-09-25), not guessed: QUAKES class (shortest
-// MIN_WINDOW=3600s / MIN_LEAD=1800s of the four classes), publishers
-// USGS_QUAKE + EMSC (the only two QUAKES publishers the registry allows),
-// a real Northern California bounding box, threshold 1.00 Mw (cmp gte),
-// window starting MIN_LEAD + 120s from send time, MIN_BET stake (0.01 GEN)
-// + CREATE_BOND (0.05 GEN) attached exactly as create_event requires.
+// The constitution below uses a QUAKES event (the shortest MIN_WINDOW
+// and MIN_LEAD of the four classes), the two publishers the registry
+// allows for that class, a real bounding box, and MIN_BET + CREATE_BOND
+// attached exactly as create_event requires. See docs/deployment.md.
 //
 // Usage:
 //   DATUM_KEYSTORE_PATH=... DATUM_KEYSTORE_PASSWORD=... node scripts/create_event.mjs

@@ -1,17 +1,19 @@
 # Integration test runbook (manual, documented -- not automated)
 
-Live integration tests against a real Studio Dev deployment cannot be run
-in this session (no deploy was attempted, and the local `gltest`/
-`genvm-lint` runtime toolchain is blocked -- see `docs/STATUS.md`). This
-runbook documents the manual steps a future steward should run once a
-contract is actually deployed, rather than silently skipping integration
-coverage.
+`gltest` direct-mode (see [testing.md](../docs/testing.md)) runs the contract
+in a single-process GenVM sandbox with one simulated leader and cannot
+exercise real multi-validator consensus, real chain time, or a genuine
+appeal/adjudicate round trip against a live network. This runbook is the
+manual test plan for exercising those flows against an actual deployment
+(see [deployment.md](../docs/deployment.md) for the current address).
+Payable calls require `genlayer-js` directly, since `genlayer write` cannot
+attach value -- see `scripts/create_event.mjs` for a working example.
 
 ## Prerequisites
 
-- A DATUM contract deployed on Studio Dev (chain 61997) -- see
-  `docs/STATUS.md` section (c) for the deploy commands.
-- Two funded Studio Dev accounts (creator + acceptor).
+- A DATUM contract deployed on Studio Next (chain 61997) -- see
+  [deployment.md](../docs/deployment.md) for the deploy command.
+- Two funded Studio Next accounts (creator + acceptor).
 - `frontend/.env` pointed at the deployed contract address.
 
 ## Manual test plan
@@ -59,5 +61,5 @@ coverage.
    with zero fee.
 
 Record the actual observed transaction hashes and outcomes in this file
-(or a dated copy of it) once run -- do not silently mark this runbook as
-"passed" without real transaction evidence.
+(or a dated copy of it) once run -- do not mark this runbook as "passed"
+without real transaction evidence.

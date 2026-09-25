@@ -42,24 +42,17 @@ artifacts/Datum.bundled.py  the generated, single-file deploy artifact.
   `lapse_appeal`) only credits this ledger.
 - `treasury: str` -- a constructor-immutable address, not a counter. Fee
   shares and forfeited bonds are `_credit()`-ed to this address's
-  `claimable` balance exactly like any other party's -- there is no
-  separate, undrainable treasury ledger. (An earlier version of this
-  contract accumulated a `treasury_balance: u256` counter with no
-  withdrawal method at all, permanently stranding every fee and slashed
-  bond; fixed by routing treasury through the same tested ledger everyone
-  else uses. See CHANGELOG.md.)
+  `claimable` balance exactly like any other party's, and withdrawn
+  through the same `claim()` path -- there is no separate counter-based
+  treasury ledger that could accumulate value with no withdrawal method.
 
 `Datum.__init__(self, treasury: str)` only assigns this one scalar field.
-Every `TreeMap` field is left as a bare class annotation -- this SDK
-generation's storage generator (`Contract.__init_subclass__` ->
-`generate_storage`) auto-allocates every declared persistent field at
-class-definition time and rejects a hand-rolled `TreeMap()` call inside
-`__init__` outright (`GenerationError: generic storage classes can not be
-instantiated with __init__`). This supersedes an earlier, differently
--behaved SDK generation this codebase had previously confirmed safe with
-explicit `self.field = TreeMap()` init (see project memory
-`genlayer-treemap-explicit-init-safe` for the version-dependent history)
--- treat that pattern as version-dependent, not universal, going forward.
+Every `TreeMap` field is left as a bare class annotation. The storage
+generator (`Contract.__init_subclass__` -> `generate_storage`)
+auto-allocates every declared persistent field at class-definition time
+and rejects a hand-rolled `TreeMap()` call inside `__init__`
+(`GenerationError: generic storage classes can not be instantiated with
+__init__`).
 
 ## The 1:1 wager model
 
@@ -93,31 +86,21 @@ envelope (right shape, internally coherent, but not what the real
 publishers actually returned) would pass a structural-only check; it
 cannot pass this one unless the validator's own independent fetch agrees.
 
-This was a real, confirmed bug in an earlier version of this contract:
-`validator_fn` originally only ran `evaluate_envelope` on the LEADER's own
-claimed JSON, checking internal self-consistency (does the claimed
-verdict match the claimed sources) without ever independently re-acquiring
-the underlying publisher data itself. That is exactly the pattern behind
-multiple real GenLayer steward rejections on prior projects on this
-machine (project memory `genlayer-master-audit-prompt` items 4/60/65:
-"a validator function that only checks the leader's output is well-formed
-... without independently re-deriving its own answer ... will be rejected
-by GenLayer stewards"). Fixed by having `validator_fn` call `leader_fn()`
-a second time and compare two independent derivations, per the
-established correct pattern -- both to `evaluate_envelope` calls' outputs,
-never to the leader's own claimed verdict/code fields directly. This means
-the "does code trust the model's own verdict field, or even the model's
-own claimed evidence" question has one factual answer: no -- every
-accepted record reflects two independently-executed prompt calls that
-agreed, not one call trusted at face value.
+A validator that only checks the leader's own claimed output for internal
+consistency -- without independently re-acquiring the underlying evidence
+-- can be satisfied by a leader that fabricates a self-consistent but
+fictional envelope. Comparing two independent derivations closes that
+gap: the "does code trust the model's own verdict field, or even the
+model's own claimed evidence" question has one factual answer: no --
+every accepted record reflects two independently-executed prompt calls
+that agreed, not one call trusted at face value.
 
 ## Why `run_nondet` and not `strict_eq`
 
-Per this codebase's own prior findings (`authorization-proof-settler`,
-`independent-evidence-settler`): `gl.eq_principle.strict_eq`'s validator
-path cannot be exercised in gltest direct-mode (`spawn_sandbox` needs an
-uninstalled `cloudpickle`), while `run_nondet`'s `validator_fn` is
-independently, directly testable via `direct_vm.run_validator(...)`. Raw
+`gl.eq_principle.strict_eq`'s validator path cannot be exercised in
+`gltest` direct-mode (`spawn_sandbox` needs an uninstalled `cloudpickle`),
+while `run_nondet`'s `validator_fn` is independently, directly testable
+via `direct_vm.run_validator(...)`. Raw
 HTTP/JSON responses across two independently-fetched publishers are also
 never expected to be byte-identical (headers, volatile generation
 timestamps, key order), which rules out `strict_eq` on raw payloads

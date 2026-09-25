@@ -3,29 +3,22 @@ gltest direct-mode tests for the DATUM contract. Deploys the real bundle
 (artifacts/Datum.bundled.py) into a real GenVM sandbox and exercises the
 actual create/accept/adjudicate/cancel flow -- this is a genuine execution
 proof, not a mock of the contract's own logic (contracts/datum_lib.py's
-55+ plain-pytest unit tests already cover the pure logic in isolation;
-this file proves the gl.Contract/storage/event wiring around it works on
-a real GenVM runtime).
+plain-pytest unit tests already cover the pure logic in isolation; this
+file proves the gl.Contract/storage/event wiring around it works on a
+real GenVM runtime).
 
-Getting this file running at all required three real, non-toolchain fixes,
-documented in CHANGELOG.md and docs/STATUS.md:
+Notes on running this file:
 
-1. contracts/Datum.py used `from genlayer import *` and bare `gl.Contract`
-   / `gl.Event` / `gl.vm.run_nondet_unsafe` -- all stale pre-v0.3.0 API
-   names. The current SDK (pinned by this file's own Depends hash) needs
-   `import genlayer as gl`, `gl.contract.Contract`, `gl.chain.Event`, and
-   `gl.vm.run_nondet`. Confirmed against the real installed SDK source
-   (not docs/memory) and against contracts/PrecedenceSettler.py in a
-   sibling project that has actually deployed and FINALIZED on this same
-   network with the same Depends hash.
-2. `__init__` explicitly instantiated its TreeMap fields
-   (`self.events = TreeMap()`). This SDK build's storage generator
+1. The contract uses the current GenLayer SDK API: `import genlayer as gl`,
+   `gl.contract.Contract`, `gl.chain.Event`, and `gl.vm.run_nondet` (not
+   the pre-v0.3.0 `from genlayer import *` / bare `gl.Contract` /
+   `gl.vm.run_nondet_unsafe` names).
+2. `__init__` must stay empty. This SDK build's storage generator
    allocates every declared persistent field automatically at class
    definition time (`Contract.__init_subclass__` -> `generate_storage`);
-   calling `TreeMap()` by hand in `__init__` raises `GenerationError:
-   generic storage classes can not be instantiated with __init__`. Fixed
-   by leaving `__init__` empty -- the framework's own auto-allocation is
-   what a fresh deploy actually needs.
+   hand-instantiating a TreeMap field in `__init__` raises
+   `GenerationError: generic storage classes can not be instantiated with
+   __init__`.
 3. gltest's own `artifacts/` output directory happens to share a name
    with scripts/build_bundle.py's output directory, and gltest clears it
    at session start. The `contract` fixture below rebuilds the bundle
@@ -208,15 +201,14 @@ class TestAdjudicateBeforeCloseRejected:
 
 
 class TestAppealBondResolution:
-    """Regression coverage for a real fund-stranding bug found and fixed
-    this session: _settle() (called from finalize()) never used to read
-    or clear rec["appeal"] at all -- an appeal bond posted via appeal()
-    was neither refunded nor forfeited on the ordinary, expected-to-work
-    appeal -> re_adjudicate -> finalize path, and once FINALIZED there was
-    no recovery path left. Fixed by resolving the bond inside _settle()
-    itself: refund the appellant if the appeal changed the verdict,
-    forfeit to treasury (same rule lapse_appeal() already used for a
-    stalled appeal) if it didn't."""
+    """Regression coverage for a fund-stranding path: _settle() (called
+    from finalize()) must read and clear rec["appeal"], or an appeal bond
+    posted via appeal() is neither refunded nor forfeited on the ordinary
+    appeal -> re_adjudicate -> finalize path, and once FINALIZED there is
+    no recovery path left. The bond is resolved inside _settle() itself:
+    refund the appellant if the appeal changed the verdict, forfeit to
+    treasury (same rule lapse_appeal() uses for a stalled appeal) if it
+    didn't."""
 
     ADJUDICATE_BOND = 2 * 10**16
     APPEAL_BOND = max(STAKE // 2, 5 * 10**16)

@@ -6,7 +6,7 @@ DATUM settles one question on-chain: did a named instrument at a named official 
 
 **Contract:** [`0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3`](https://explorer-studio-dev.genlayer.com/address/0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3) — Studio Next, chain 61997. Deploy tx [`0x84b5319b1ca744c47a0c3c36894e69cf3466c0cc3c876f4fcecf8315c440ae03`](https://explorer-studio-dev.genlayer.com/tx/0x84b5319b1ca744c47a0c3c36894e69cf3466c0cc3c876f4fcecf8315c440ae03), ACCEPTED.
 
-**Create tx:** payable `create_event` has not yet landed on-chain. `genlayer write` (the CLI) cannot attach GEN to any payable method — confirmed by reading its source, not assumed. `scripts/create_event.mjs` is written, uses the same keystore pattern that deployed this contract, and is verified structurally correct against the SDK's own type definitions, but was not run: it needs the deployer keystore's password, which this session never had and did not ask for or guess. Exact command and full detail in [docs/STATUS.md](docs/STATUS.md).
+**Create tx:** payable `create_event` has not yet landed on-chain. `genlayer write` (the CLI) cannot attach GEN to any payable method — confirmed by reading its source. `scripts/create_event.mjs` builds a real constitution from the contract's own live registry and config and calls `create_event` with the correct value attached; it needs the deployer keystore's password to run, which is never stored or guessed. Exact command and full detail in [docs/deployment.md](docs/deployment.md).
 
 > "Official station observation at locked publishers for this window."
 
@@ -65,7 +65,7 @@ If an event never reaches a terminal state at all, `recover_refund()` returns bo
 
 ## Methods
 
-22 public methods (10 view, 12 write) -- independently confirmed live via `gen_getContractSchema` against the deployed contract, and via `genvm-lint schema` against the bundle. See `docs/STATUS.md`.
+22 public methods (10 view, 12 write) -- independently confirmed live via `gen_getContractSchema` against the deployed contract, and via `genvm-lint schema` against the bundle. See [docs/deployment.md](docs/deployment.md).
 
 **Writes:** `create_event`, `accept_event`, `adjudicate`, `finalize`, `appeal`, `re_adjudicate`, `lapse_appeal`, `cancel_event`, `expire_event`, `claim`, `recover_refund`, `reclaim_bonds`.
 
@@ -110,7 +110,7 @@ python -m pytest tests/direct/test_datum_contract.py -q
 | Explorer | https://explorer-studio-dev.genlayer.com |
 | Currency | GEN, 18 decimals |
 
-**Studio Next state may reset at any time.** Do not treat the contract address, any event id, or any balance on this network as durable. If the address stops resolving, it was reset -- see `docs/STEWARD.md` for the redeploy command.
+**Studio Next state may reset at any time.** Do not treat the contract address, any event id, or any balance on this network as durable. If the address stops resolving, it was reset -- see [docs/deployment.md](docs/deployment.md) for the redeploy command.
 
 ## Proven on-chain vs. proven only in `gltest`
 
@@ -125,7 +125,7 @@ Stated explicitly rather than left to be inferred from where a claim appears:
 - Every payable method: `create_event`, `accept_event`, `adjudicate`, `appeal`, `re_adjudicate`. No GEN has moved through this contract on any live network yet.
 - The lying-leader rejection (`adjudicate()`'s validator independently re-fetching and rejecting a leader whose result disagrees) -- proven at the `datum_lib` comparator level and via `gltest`'s single-leader execution, but never against two genuinely independent GenVM nodes actually disagreeing, which `gltest` cannot simulate.
 - `claim()`'s actual payout -- proven at the internal ledger-accounting level (`claimable` zeroes, the right amount is returned) in `gltest`, not as a real GEN balance delta on a live account, since no real stake has moved yet to claim.
-- The other six write methods with no frontend UI limitation removed this session (`appeal`, `re_adjudicate`, `lapse_appeal`, `cancel_event`, `expire_event`, `reclaim_bonds`) -- type-checked, never clicked through a live wallet.
+- The other six write methods with frontend UI entry points (`appeal`, `re_adjudicate`, `lapse_appeal`, `cancel_event`, `expire_event`, `reclaim_bonds`) -- type-checked, never clicked through a live wallet.
 
 ## What we refused (by design, at `create_event` time)
 
@@ -151,4 +151,4 @@ genlayer deploy --contract artifacts/Datum.bundled.py \
 
 Needs BOTH a complete fee distribution (not just `--fee-value`) and a
 JSON-quoted string argument (`--args '"0x..."'`, not `'["0x..."]'`) --
-full diagnosis of why the naive form fails in [docs/STATUS.md](docs/STATUS.md).
+full diagnosis of why the naive form fails in [docs/deployment.md](docs/deployment.md).
