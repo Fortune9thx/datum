@@ -32,6 +32,11 @@ future version of the original author).
 - Live write proof (returns the contract's own UserError from a real
   consensus round):
   `0x01809ec4ac941cb0b6feba525599153dfc0c1cc13e87cd2da295714fac31fe71`
+- **create_event tx: none yet.** Payable create has not landed on-chain --
+  `scripts/create_event.mjs` is written and structurally verified, blocked
+  on the deployer keystore's password (never available this session, not
+  guessed). See `docs/STATUS.md`'s "a real create_event attempt" section
+  for the exact command to run with it.
 - Machine-readable deploy record: `deploy/deployments.json`
 - Test commands: `python -m pytest tests/direct/ -q` (91 tests total: 64
   in `test_datum_lib.py`, 27 in `test_datum_contract.py`),
@@ -180,11 +185,12 @@ Docker installed), documented there for whoever has it.
   other party uses, rather than a separate counter -- see CHANGELOG.md's
   1.1.3 entry for why a separate, undrainable counter was a real bug.
 
-## Portal submission notes (draft)
+## Portal submission notes
 
 DATUM settles whether an official station observation cleared a locked
-threshold. GenLayer validators fetch two locked publishers and must agree
-on usable readings (station id, window, unit, product status, converted
+threshold. Validators fetch two locked publishers and must agree on
+usable readings (station id, window, unit, product status, converted
 value within tolerance). Code compares. Missing or conflicting evidence
-refunds both sides. Frontend is live; contract status is in
-docs/STATUS.md.
+refunds. Live on Studio Next 61997 at
+0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3. App:
+https://datum-gamma.vercel.app

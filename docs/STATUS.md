@@ -78,17 +78,54 @@ real write path executes real contract logic and returns the contract's
 own `USER_ERRORS` string from a real consensus round, without spending a
 stake.
 
-### Not yet smoke-tested live, and why
+### 2026-09-25 (later): a real `create_event` attempt -- blocked on a password, not the code
 
-`create_event` (and every other payable method) could **not** be called
-from the CLI: `genlayer write` has no flag for attaching native GEN to a
-payable method (`--help` confirms; the underlying `genlayer-js`
-`writeContract` supports `value`, the CLI simply does not expose it). A
-real `create_event` therefore needs either the frontend with an injected
-wallet, or a direct `genlayer-js` script with a decrypted keystore. This
-is the one remaining unexercised path -- the contract is live and
-verified for reads and non-payable writes, but no GEN has moved through
-it yet.
+`create_event` (and every other payable method) cannot be called from the
+`genlayer` CLI at all: `genlayer write`'s source
+(`node_modules/genlayer/dist/index.js`'s `WriteAction.write`) hardcodes
+`writeParams.value = 0n` with no flag anywhere to override it -- confirmed
+by reading the source, not just `--help`. The underlying `genlayer-js`
+`client.writeContract()` fully supports `value`; only the CLI's own
+`write` subcommand doesn't expose it.
+
+Wrote `scripts/create_event.mjs`, following `scripts/deploy.mjs`'s exact
+keystore-decrypt pattern (the one that actually deployed this contract),
+building the constitution from this contract's own **live**
+`get_registry()`/`get_config()` output, not guessed: QUAKES class
+(shortest `MIN_WINDOW` = 3600s / `MIN_LEAD` = 1800s of the four classes),
+publishers `USGS_QUAKE` + `EMSC` (the only two the live registry allows
+for QUAKES), a real Northern California bbox, threshold 1.00 Mw (`gte`),
+window starting `MIN_LEAD + 120s` from send time, and `MIN_BET` (0.01
+GEN) + `CREATE_BOND` (0.05 GEN) attached exactly as `create_event`
+requires. Uses `client.estimateTransactionFeesForWrite()` (simulates the
+real call) rather than the generic estimator that caused the earlier
+deploy confusion. Verified the script's structure is correct --
+`genlayer-js` exports every function it calls, confirmed against the
+installed package's own type definitions -- but **it was not run**.
+
+**Blocked on a password, not on missing code or a missing keystore.** The
+keystore file (`~/.genlayer/keystores/bradbury-deploy.json`, the account
+that deployed this contract) exists on this machine. Its password does
+not exist anywhere this session has access to, was never asked for in
+chat, and was not guessed or brute-forced -- handling a wallet password
+in plain text is refused regardless of how the request is phrased. This
+is the real, correct stop condition, not a workaround-needed one: the
+`genlayer` CLI's own already-unlocked session for this account (used for
+every read and non-payable write above) manages its decrypted key
+internally and does not expose it for a script to reuse, by design.
+
+**Exact command for whoever has the password:**
+
+```bash
+cd C:\Users\HP\Desktop\datum
+DATUM_KEYSTORE_PATH="C:\Users\HP\.genlayer\keystores\bradbury-deploy.json" DATUM_KEYSTORE_PASSWORD=... node scripts/create_event.mjs
+```
+
+On success it writes `scripts/create_event_result.json` with the tx hash,
+event id, and the real `get_event(id)` response read back from chain, and
+prints the exact steps to fold that into this file and
+`deploy/deployments.json`. **Payable create has not yet landed on-chain**
+-- stated plainly rather than implied otherwise anywhere in this repo.
 
 ### A real frontend bug this deploy exposed
 

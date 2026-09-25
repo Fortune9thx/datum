@@ -2,11 +2,11 @@
 
 DATUM settles one question on-chain: did a named instrument at a named official station, over a locked window, clear a locked threshold?
 
-**Live app:** https://datum-gamma.vercel.app — reading the live contract (board shows the LIVE banner with the deployed address; empty because no events exist yet, never placeholder rows).
+**Live app:** https://datum-gamma.vercel.app — reading the live contract (LIVE banner with the deployed address; board is empty because no events exist yet, never placeholder rows).
 
-**Contract:** live on Studio Next (chain 61997) at [`0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3`](https://explorer-studio-dev.genlayer.com/address/0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3) — deploy tx `0x84b5319b1ca744c47a0c3c36894e69cf3466c0cc3c876f4fcecf8315c440ae03`, ACCEPTED. Verified live: `get_config` returns real on-chain config, and a real write returns the contract's own `event not found` UserError from a real consensus round. Full record in [`deploy/deployments.json`](deploy/deployments.json) and [docs/STATUS.md](docs/STATUS.md).
+**Contract:** [`0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3`](https://explorer-studio-dev.genlayer.com/address/0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3) — Studio Next, chain 61997. Deploy tx [`0x84b5319b1ca744c47a0c3c36894e69cf3466c0cc3c876f4fcecf8315c440ae03`](https://explorer-studio-dev.genlayer.com/tx/0x84b5319b1ca744c47a0c3c36894e69cf3466c0cc3c876f4fcecf8315c440ae03), ACCEPTED.
 
-**Not yet exercised live:** no GEN has moved through the contract yet — `create_event` and the other payable methods need a wallet (the `genlayer` CLI cannot attach value to a payable write). Local proof stands at 91 tests (64 pure-logic + 27 against a live GenVM sandbox), covering every write method's happy *and* refusal path — see [docs/localnet.md](docs/localnet.md).
+**Create tx:** payable `create_event` has not yet landed on-chain. `genlayer write` (the CLI) cannot attach GEN to any payable method — confirmed by reading its source, not assumed. `scripts/create_event.mjs` is written, uses the same keystore pattern that deployed this contract, and is verified structurally correct against the SDK's own type definitions, but was not run: it needs the deployer keystore's password, which this session never had and did not ask for or guess. Exact command and full detail in [docs/STATUS.md](docs/STATUS.md).
 
 > "Official station observation at locked publishers for this window."
 
@@ -14,7 +14,7 @@ DATUM settles one question on-chain: did a named instrument at a named official 
 
 Not the inequality -- code does that, in plain integer arithmetic, and anyone can re-run it. GenLayer's validator set settles the part that actually requires judgment: which official station id reported (never a free-text nickname), whether what it reported is a completed observation (never a forecast), whether its product status is FINAL or PRELIMINARY under this event's own locked policy, whether its timestamp falls inside the locked window, what unit it was reported in, and whether two independently-read publishers agree within a locked tolerance.
 
-The leader returns a structured JSON envelope: per-publisher source rows, plus a *proposed* verdict and code. That proposed verdict is never trusted. `contracts/datum_lib.py`'s `evaluate_envelope()` independently re-derives the verdict and code from the structured rows in integer arithmetic and only accepts the envelope when the leader's own claim matches the independent derivation exactly. Any mismatch, or any malformed field, is rejected outright and moves no funds.
+The leader returns a structured JSON envelope: per-publisher source rows, plus a *proposed* verdict and code. That proposed verdict is never trusted. `contracts/datum_lib.py`'s `evaluate_envelope()` independently re-derives the verdict and code from the structured rows in integer arithmetic and only accepts the envelope when the leader's own claim matches the independent derivation exactly. Any mismatch, or any malformed field, is rejected outright and moves no funds. `adjudicate()`'s validator additionally re-fetches independently (a second `gl.nondet.exec_prompt` call) rather than only checking the leader's own claim for internal consistency -- see point 13 below for what's proven where.
 
 ## Who profits from a false "usable" reading
 
@@ -29,7 +29,7 @@ Whichever side of the wager that false reading favors. This is exactly why accep
 | STAGE | River stage | USGS 8-digit site number | m | 6h | 2h | USGS_WATER + NOAA_NWPS |
 | QUAKES | Max moment magnitude in a bbox | Bounding box (+ optional depth) | Mw | 1h | 30m | USGS_QUAKE + EMSC |
 
-## Equivalence: must agree vs. may differ vs. unusable
+## Must agree vs. may differ vs. unusable
 
 **Must agree**, per usable source, within the constitution's locked tolerance: the converted reading value, the station id (or, for QUAKES, an epicenter inside the locked bbox), the product status, and that the timestamp falls inside the locked window.
 
@@ -65,7 +65,7 @@ If an event never reaches a terminal state at all, `recover_refund()` returns bo
 
 ## Methods
 
-22 public methods (10 view, 12 write) -- independently confirmed via `genvm-lint schema` against the deployable bundle, see `docs/STATUS.md`.
+22 public methods (10 view, 12 write) -- independently confirmed live via `gen_getContractSchema` against the deployed contract, and via `genvm-lint schema` against the bundle. See `docs/STATUS.md`.
 
 **Writes:** `create_event`, `accept_event`, `adjudicate`, `finalize`, `appeal`, `re_adjudicate`, `lapse_appeal`, `cancel_event`, `expire_event`, `claim`, `recover_refund`, `reclaim_bonds`.
 
@@ -73,50 +73,59 @@ If an event never reaches a terminal state at all, `recover_refund()` returns bo
 
 Full typed signatures in `contracts/Datum.py`.
 
-## How to test
+## Tests + lint
 
 ```bash
 # Primary, verified coverage -- zero genlayer imports, plain pytest.
 # Includes 5 dedicated "lying leader" tests: reproduces adjudicate()'s
 # real validator comparison and proves a leader whose independent
 # re-fetch would disagree (on usability, station id, tolerance, or
-# window) is rejected -- see docs/audit.md's "Witness mismatch" section.
+# window) is rejected.
 python -m pytest tests/direct/test_datum_lib.py -q
 # 64 passed
 
 # Rebuild the deployable bundle + size check:
 python scripts/build_bundle.py
-# 41489 bytes, well under the 52224-byte Studio ceiling
+# 41489 bytes, well under the 52224-byte Studio ceiling -- sha256 matches
+# the deployed contract exactly, see deploy/deployments.json
 
 # AST-based safety lint + full runtime validation, both on the bundle:
 PYTHONIOENCODING=utf-8 genvm-lint check artifacts/Datum.bundled.py
 # Lint passed (3 checks); Validation passed; 22 methods (10 view, 12 write)
 
 # gltest direct-mode: real deploy + happy path AND refusal path for
-# EVERY one of the 12 write methods, against a live GenVM sandbox (see
-# docs/localnet.md for exactly what this does and does not prove):
+# EVERY one of the 12 write methods, against a live GenVM sandbox:
 python -m pytest tests/direct/test_datum_contract.py -q
 # 27 passed
 ```
 
-## How to deploy
+## Network
 
-Deployed and live. The exact command that worked, after a long run of
-`FeeValueMustBeNonZero` failures, needs BOTH a complete fee distribution
-(not just `--fee-value`) and a JSON-quoted string argument (a bare
-`0x...` is parsed as an address type, and `["0x..."]` is parsed as a
-single array argument):
+| | |
+|---|---|
+| Network | Studio Next (Studio Dev) |
+| Chain id | 61997 |
+| RPC | https://studio-dev.genlayer.com/api |
+| Studio UI | https://studio-dev.genlayer.com |
+| Explorer | https://explorer-studio-dev.genlayer.com |
+| Currency | GEN, 18 decimals |
 
-```bash
-python scripts/build_bundle.py
-genlayer deploy --contract artifacts/Datum.bundled.py   --args '"0xYOUR_TREASURY_ADDRESS"'   --fees '{"distribution":{"rotations":[0],"appealRounds":0,"totalMessageFees":0,"executionConsumed":0,"receiptFeeMaxGasPrice":"300000000","storageFeeMaxGasPrice":"300000000","maxPriceGenPerTimeUnit":"2","executionBudgetPerRound":"94643100000000","leaderTimeunitsAllocation":"100","validatorTimeunitsAllocation":"200"}}'   --fee-value 94643100002588
-```
+**Studio Next state may reset at any time.** Do not treat the contract address, any event id, or any balance on this network as durable. If the address stops resolving, it was reset -- see `docs/STEWARD.md` for the redeploy command.
 
-Full diagnosis of why the earlier attempts failed (and why the earlier
-"client-side CLI bug" conclusion was wrong) is in
-[docs/STATUS.md](docs/STATUS.md).
-A real local execution proof exists in the meantime:
-[docs/localnet.md](docs/localnet.md).
+## Proven on-chain vs. proven only in `gltest`
+
+Stated explicitly rather than left to be inferred from where a claim appears:
+
+**Proven on real Studio Next execution:**
+- Deploy itself (constructor, storage allocation, all 22 methods registered) -- `gen_getContractSchema` against the live address.
+- A real read (`get_config`) returning real on-chain state.
+- A real non-payable write (`expire_event` on a nonexistent id) returning the contract's own `event not found` UserError from a real consensus round -- proves write dispatch and error handling execute on-chain, not just in a mock.
+
+**Proven only in `gltest` direct-mode (a real GenVM sandbox, but a single in-process leader, not real multi-validator consensus), not yet on-chain:**
+- Every payable method: `create_event`, `accept_event`, `adjudicate`, `appeal`, `re_adjudicate`. No GEN has moved through this contract on any live network yet.
+- The lying-leader rejection (`adjudicate()`'s validator independently re-fetching and rejecting a leader whose result disagrees) -- proven at the `datum_lib` comparator level and via `gltest`'s single-leader execution, but never against two genuinely independent GenVM nodes actually disagreeing, which `gltest` cannot simulate.
+- `claim()`'s actual payout -- proven at the internal ledger-accounting level (`claimable` zeroes, the right amount is returned) in `gltest`, not as a real GEN balance delta on a live account, since no real stake has moved yet to claim.
+- The other six write methods with no frontend UI limitation removed this session (`appeal`, `re_adjudicate`, `lapse_appeal`, `cancel_event`, `expire_event`, `reclaim_bonds`) -- type-checked, never clicked through a live wallet.
 
 ## What we refused (by design, at `create_event` time)
 
@@ -130,15 +139,16 @@ A real local execution proof exists in the meantime:
 - A model's own YES/NO/verdict trusted without code independently re-deriving and matching it
 - An admin key that can seize funds or force a verdict
 
-## Network
+## How to deploy (already done once; here for redeploy after a reset)
 
-| | |
-|---|---|
-| Network | Studio Next (Studio Dev) only |
-| Chain id | 61997 |
-| RPC | https://studio-dev.genlayer.com/api |
-| Studio UI | https://studio-dev.genlayer.com |
-| Explorer | https://explorer-studio-dev.genlayer.com |
-| Currency | GEN, 18 decimals |
+```bash
+python scripts/build_bundle.py
+genlayer deploy --contract artifacts/Datum.bundled.py \
+  --args '"0xYOUR_TREASURY_ADDRESS"' \
+  --fees '{"distribution":{"rotations":[0],"appealRounds":0,"totalMessageFees":0,"executionConsumed":0,"receiptFeeMaxGasPrice":"300000000","storageFeeMaxGasPrice":"300000000","maxPriceGenPerTimeUnit":"2","executionBudgetPerRound":"94643100000000","leaderTimeunitsAllocation":"100","validatorTimeunitsAllocation":"200"}}' \
+  --fee-value 94643100002588
+```
 
-**Studio Dev state may reset at any time.** Do not treat any address, event id, or balance on this network as durable.
+Needs BOTH a complete fee distribution (not just `--fee-value`) and a
+JSON-quoted string argument (`--args '"0x..."'`, not `'["0x..."]'`) --
+full diagnosis of why the naive form fails in [docs/STATUS.md](docs/STATUS.md).
