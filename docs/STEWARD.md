@@ -7,48 +7,70 @@ future version of the original author).
 
 1. Open https://datum-gamma.vercel.app -- a paper/ink long-scroll
    explaining what DATUM settles and how, then `/app` for the live board.
-2. The board, ticket, portfolio, and activity pages are all currently
-   empty, with an honest orange banner: **"Contract not deployed on
-   Studio Next (61997)."** That is correct, not broken -- see below.
+2. The board shows a green **LIVE** banner with the deployed contract
+   address `0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3` and an explorer
+   link, and reads real zeros from the real contract. It is empty because
+   no events have been created yet -- never placeholder or demo rows.
 3. Read `/app/docs` in the app (or `README.md` in this repo) for the
    constitution, the equivalence rules, and the economics.
-4. For proof the contract itself works, despite not being deployed: run
-   `python -m pytest tests/direct/test_datum_contract.py -q` -- 9/9
-   passing, a real deploy + create/accept/cancel/adjudicate-guard flow
-   against a live GenVM sandbox. Full detail in `docs/localnet.md`.
+4. Verify the contract yourself in one command:
+   `genlayer call 0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3 get_config`
+   -- returns the real on-chain economics/config.
+5. For the full logic proof: `python -m pytest tests/direct/ -q` -- 91
+   passing (64 pure-logic + 27 against a live GenVM sandbox), covering
+   every write method's happy path AND refusal path. Detail in
+   `docs/localnet.md`.
 
 ## Evidence URLs
 
 - Repo: https://github.com/Fortune9thx/datum
 - Live app: https://datum-gamma.vercel.app
-- Contract address: none yet -- see `docs/STATUS.md` for two real,
-  documented Studio Dev deploy attempts (both blocked by an infra-side
-  FeeManager revert) and `docs/localnet.md` for the local proof instead.
-- Test commands: `python -m pytest tests/direct/ -q` (68 tests total: 59
-  in `test_datum_lib.py`, 9 in `test_datum_contract.py`), `PYTHONIOENCODING=utf-8
-  genvm-lint check artifacts/Datum.bundled.py` for the full-runtime lint.
+- **Contract (live, Studio Next / chain 61997):**
+  `0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3`
+  -- https://explorer-studio-dev.genlayer.com/address/0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3
+- Deploy tx: `0x84b5319b1ca744c47a0c3c36894e69cf3466c0cc3c876f4fcecf8315c440ae03` (ACCEPTED)
+- Live write proof (returns the contract's own UserError from a real
+  consensus round):
+  `0x01809ec4ac941cb0b6feba525599153dfc0c1cc13e87cd2da295714fac31fe71`
+- Machine-readable deploy record: `deploy/deployments.json`
+- Test commands: `python -m pytest tests/direct/ -q` (91 tests total: 64
+  in `test_datum_lib.py`, 27 in `test_datum_contract.py`),
+  `PYTHONIOENCODING=utf-8 genvm-lint check artifacts/Datum.bundled.py`
+  for the full-runtime lint.
+
+## The one thing still unexercised
+
+No GEN has moved through the contract yet. `create_event` and every other
+payable method needs a wallet: `genlayer write` has no flag for attaching
+native GEN to a payable method (the underlying `genlayer-js`
+`writeContract` supports `value`; the CLI does not expose it). Reads and
+non-payable writes are both verified live on-chain -- a real payable call
+is the remaining gap, and it needs either the frontend with an injected
+wallet or a direct `genlayer-js` script with a decrypted keystore.
 
 ## What is genuinely done
 
 - `contracts/datum_lib.py` -- the full rule set (constitution validation,
   publisher registry, unit conversion, volatile-key stripping, aggregation
   + equivalence acceptance, economics math, pagination, the adjudication
-  prompt builder) with 59 passing plain-pytest unit tests. Zero genlayer
-  imports, zero toolchain dependency -- the most trustworthy part of the
-  repo.
+  prompt builder) with 64 passing plain-pytest unit tests, including 5
+  "lying leader" comparator-rejection tests. Zero genlayer imports, zero
+  toolchain dependency -- the most trustworthy part of the repo.
 - `contracts/Datum.py` -- the full write/view API from the spec (22
   methods: 10 view, 12 write), wired to `datum_lib`'s logic via the
   bundler. `genvm-lint check` (full runtime validation, not just static
   lint) passes cleanly on the bundle.
 - `scripts/build_bundle.py` -- regenerates `artifacts/Datum.bundled.py`
-  (~40.7KB, well under the 52224-byte Studio ceiling) any time either
+  (~41.5KB, well under the 52224-byte Studio ceiling) any time either
   source file changes. **Run it after every edit to `contracts/*.py` --
   the bundle is what actually gets deployed and tested, and it is not
   auto-regenerated on save.**
 - `tests/direct/test_datum_contract.py` -- a real `gltest` direct-mode
-  execution proof, 9/9 passing (deploy, create with real GEN attached,
-  accept from a second account, three create-time refusals, cancel
-  restricted to the creator, adjudicate refusing before window close).
+  execution proof, 27/27 passing, covering a happy path AND a refusal
+  path for every one of the 12 write methods (create/accept/adjudicate/
+  finalize/appeal/re_adjudicate/lapse_appeal/cancel/expire/claim/
+  recover_refund/reclaim_bonds), with real GEN attached via
+  `direct_vm.value` and multi-account flows via `direct_vm.prank`.
 - `frontend/` -- the Next.js web app, live at
   https://datum-gamma.vercel.app. A marketing long-scroll at `/`, and the
   app under `/app` (board), `/app/e/:id` (ticket), `/app/create`,
@@ -56,10 +78,12 @@ future version of the original author).
   `/board` and `/e/:id` redirect to their `/app` equivalents. Verified
   live in-browser (desktop + 375px mobile, zero console errors).
 
-  It fails closed in four distinct, separately-worded states, via
-  `probeContract()` in `src/lib/datum/network.ts`: no address configured,
-  address set but no code (Studio Next was reset), RPC unreachable, and
-  live. An unreachable RPC is never rendered as "no events" -- each state
+  It distinguishes four states via `probeContract()` in
+  `src/lib/datum/network.ts` (which uses `gen_getContractSchema`, NOT
+  `eth_getCode` -- a GenLayer contract returns `0x` from `eth_getCode`
+  even when live, a real bug the deploy exposed): no address configured,
+  address set but nothing deployed there (Studio Next was reset), RPC
+  unreachable, and live. An unreachable RPC is never rendered as "no events" -- each state
   states what is actually true, and no view ever substitutes placeholder
   or demo rows for a live contract.
 - GitHub push and Vercel production deploy are both live (see Evidence
@@ -67,11 +91,12 @@ future version of the original author).
 
 ## What is NOT done yet, and why
 
-1. **No contract is deployed to Studio Dev.** Two real attempts (a
-   trivial Hello contract and the full DATUM bundle, via `genlayer
-   deploy`) both reverted identically with `FeeValueMustBeNonZero` --
-   confirmed infra-side (Studio Dev's FeeManager), not a bug in this
-   repo. Full proof and exact retry commands: `docs/STATUS.md`.
+1. **No GEN has moved through the contract yet.** The contract IS
+   deployed and live (reads and non-payable writes both verified
+   on-chain), but no payable method has been called: `genlayer write`
+   cannot attach native GEN to a payable method. Needs the frontend with
+   an injected wallet, or a `genlayer-js` script with a decrypted
+   keystore. This is the single biggest remaining gap.
 2. **No genuine multi-validator disagreement has been exercised.**
    `gltest` direct-mode's single-process leader can't simulate real
    validators disagreeing with each other. See `docs/audit.md`'s
@@ -84,33 +109,28 @@ future version of the original author).
 
 ## First things to do when picking this back up
 
-1. Check whether Studio Dev's `FeeValueMustBeNonZero` issue has cleared:
-   `genlayer deploy --contract artifacts/Datum.bundled.py --args
-   '["0xYOUR_DEPLOYER_ADDRESS"]'` (the constructor now takes a required
-   `treasury` address, added this session -- see CHANGELOG.md's 1.1.3
-   entry). If it still reverts with `FeeValueMustBeNonZero`, the
-   platform-side issue in `docs/STATUS.md` is still open -- don't
-   re-experiment with fee parameters, three different configurations
-   already failed identically.
-2. Once a deploy succeeds: set `NEXT_PUBLIC_DATUM_CONTRACT_ADDRESS` in
-   Vercel (production + preview), redeploy, confirm `eth_getCode` is
-   non-empty and the live banner shows the address.
-3. Then do one real smoke transaction with real GEN, smallest legal
-   amounts: `create_event` (STAGE or QUAKES, satisfying MIN_LEAD/MIN_WINDOW),
-   `accept_event` from a second account, and stop -- do not adjudicate
-   before the window closes. Document the result in `docs/STATUS.md`,
-   success or UserError either way.
-4. Re-run `python scripts/build_bundle.py` after any contract edit --
+1. **Do the real payable smoke test** -- the one genuinely unexercised
+   path. Connect a wallet on https://datum-gamma.vercel.app/app/create
+   and create one STAGE event at the smallest legal stake (0.01 GEN +
+   0.05 GEN create bond), satisfying MIN_LEAD (2h) and MIN_WINDOW (6h).
+   Then `accept_event` from a second account if you have one, and stop --
+   do not adjudicate before the window closes. Record the result in
+   `docs/STATUS.md`, success or UserError either way.
+2. If the contract address stops resolving, Studio Next was reset (it is
+   a development preview). Redeploy with the exact command in
+   `docs/STATUS.md`'s SOLVED section -- note it needs BOTH a complete
+   `--fees` distribution and a JSON-quoted `--args '"0xADDR"'`, or it
+   will fail in one of the two documented ways. Then update
+   `deploy/deployments.json` and the Vercel env var.
+3. Re-run `python scripts/build_bundle.py` after any contract edit --
    never hand-edit `artifacts/Datum.bundled.py`.
 
-## Local recipe (Studio Dev deploy still blocked -- run this instead)
+## Local recipe (full logic proof, independent of the live deploy)
 
-Hosted deploy has failed identically on every attempt across three
-sessions (see `docs/STATUS.md` for the full A/B evidence trail) -- the
-network is healthy, this is a client-side `genlayer` CLI bug specific to
-v0.40.0-rc.3 (the only released version supporting Studio Next at all).
-Until that clears, this is the real, passing local substitute -- not a
-placeholder, an actual execution proof:
+The contract is live on Studio Next, but the local suite remains the
+fastest and most complete proof of the contract's logic -- it exercises
+every write method's happy and refusal path, including flows (appeals,
+lapses, expiry) that would take hours of real wall-clock time on-chain:
 
 ```bash
 cd C:\Users\HP\Desktop\datum

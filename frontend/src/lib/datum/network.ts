@@ -35,6 +35,23 @@ export type LiveStatus =
   | { kind: "rpc-down"; address: string }
   | { kind: "live"; address: string };
 
+/**
+ * Liveness probe. Uses `gen_getContractSchema`, NOT `eth_getCode`.
+ *
+ * This matters and was a real bug: a GenLayer intelligent contract is not
+ * an EVM contract, so `eth_getCode` returns `0x` for a perfectly live,
+ * deployed, responding contract. An earlier version of this probe used
+ * `eth_getCode` and would therefore have reported `no-code` (i.e. "Studio
+ * Next was reset, redeploy") for a contract that was actually live and
+ * answering view calls -- verified against the real deployed address on
+ * 2026-09-25, which returns `"result":"0x"` from `eth_getCode` while
+ * `gen_getContractSchema` returns its full method schema.
+ *
+ * `gen_getContractSchema` cleanly separates the states we need: a schema
+ * for a live contract, JSON-RPC error -32001 ("Contract ... not found")
+ * for an address with nothing deployed at it, and a transport/HTTP
+ * failure for an unreachable RPC.
+ */
 export async function probeContract(): Promise<LiveStatus> {
   if (!CONTRACT_ADDRESS || !/^0x[0-9a-fA-F]{40}$/.test(CONTRACT_ADDRESS)) {
     return { kind: "no-address" };
@@ -46,16 +63,21 @@ export async function probeContract(): Promise<LiveStatus> {
       body: JSON.stringify({
         jsonrpc: "2.0",
         id: 1,
-        method: "eth_getCode",
-        params: [CONTRACT_ADDRESS, "latest"],
+        method: "gen_getContractSchema",
+        params: [CONTRACT_ADDRESS],
       }),
     });
     if (!response.ok) return { kind: "rpc-down", address: CONTRACT_ADDRESS };
     const body = await response.json();
-    const code: string | undefined = body?.result;
-    if (typeof code !== "string") return { kind: "rpc-down", address: CONTRACT_ADDRESS };
-    if (code === "0x" || code.length <= 2) return { kind: "no-code", address: CONTRACT_ADDRESS };
-    return { kind: "live", address: CONTRACT_ADDRESS };
+
+    // -32001 is the network's own "Contract <addr> not found" -- the
+    // genuine "nothing deployed here / Studio Next was reset" signal.
+    if (body?.error) {
+      if (body.error.code === -32001) return { kind: "no-code", address: CONTRACT_ADDRESS };
+      return { kind: "rpc-down", address: CONTRACT_ADDRESS };
+    }
+    if (body?.result?.methods) return { kind: "live", address: CONTRACT_ADDRESS };
+    return { kind: "rpc-down", address: CONTRACT_ADDRESS };
   } catch {
     return { kind: "rpc-down", address: CONTRACT_ADDRESS };
   }
@@ -72,25 +94,6 @@ export function explorerAddressUrl(address: string): string {
  * "not deployed" and fail closed (empty lists, zeros, writes disabled).
  */
 export async function checkLiveStatus(): Promise<boolean> {
-  if (!CONTRACT_ADDRESS || !/^0x[0-9a-fA-F]{40}$/.test(CONTRACT_ADDRESS)) {
-    return false;
-  }
-  try {
-    const response = await fetch(STUDIO_DEV_RPC_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "eth_getCode",
-        params: [CONTRACT_ADDRESS, "latest"],
-      }),
-    });
-    if (!response.ok) return false;
-    const body = await response.json();
-    const code: string | undefined = body?.result;
-    return typeof code === "string" && code !== "0x" && code.length > 2;
-  } catch {
-    return false;
-  }
+  const status = await probeContract();
+  return status.kind === "live";
 }

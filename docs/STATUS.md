@@ -1,22 +1,106 @@
 # DATUM -- status
 
-Last updated: 2026-09-25. GitHub and Vercel are both live. Studio Dev
-contract deploy is blocked -- but as of 2026-09-25, this is now confirmed
-to be a client-side issue specific to the `genlayer` CLI's deploy path on
-this machine, not a broken network. See "Hosted deploy proof" below for
-the full evidence trail.
+Last updated: 2026-09-25. **The contract is deployed and live on Studio
+Next.** GitHub, Vercel, and the contract are all live and wired together.
+The long-running deploy blocker documented below was finally solved --
+the root cause was fee-distribution parameters plus a CLI argument-parsing
+gotcha, not the "client-side CLI bug" the earlier sections conclude. Those
+earlier sections are kept verbatim as an audit trail of a wrong (then
+corrected) diagnosis; **read the "SOLVED" section for what actually
+happened.**
 
 ## Deploy status
 
 | Target | Status |
 |---|---|
 | GitHub push | **Live.** https://github.com/Fortune9thx/datum, public, `main`. |
-| Vercel deploy | **Live.** https://datum-gamma.vercel.app, fails closed everywhere (see below). |
-| Studio Dev (chain 61997) contract deploy | **Blocked, client-side, CLI-specific.** The network itself is healthy -- see below. |
+| Vercel deploy | **Live.** https://datum-gamma.vercel.app, reading the live contract. |
+| Studio Next (chain 61997) contract deploy | **LIVE.** `0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3` |
 
-No contract address exists for this project yet. `NEXT_PUBLIC_DATUM_CONTRACT_ADDRESS`
-is unset in Vercel; the frontend's `probeContract()` correctly reports
-`no-address` and shows nothing but zeros and an honest banner.
+- **Contract address:** `0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3`
+- **Deploy tx:** `0x84b5319b1ca744c47a0c3c36894e69cf3466c0cc3c876f4fcecf8315c440ae03` (ACCEPTED)
+- **Explorer:** https://explorer-studio-dev.genlayer.com/address/0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3
+- **Deployer / treasury:** `0xC6E6d3b2acCaECeCeB40Ad4bD3dF123DDCB4e537`
+- Machine-readable record: `deploy/deployments.json`
+
+`NEXT_PUBLIC_DATUM_CONTRACT_ADDRESS` is set in Vercel (production,
+preview, development); the live site's board shows the **LIVE** banner
+with this address and reads real zeros from the real contract.
+
+## SOLVED (2026-09-25): what the deploy blocker actually was
+
+Two separate problems, stacked, both in how the CLI invocation was
+constructed -- **not** a bug in the CLI itself, and not the network:
+
+1. **Fee distribution, not fee value.** Every failed attempt passed only
+   `--fee-value` (letting the CLI derive `distribution` itself, which
+   defaults to `rotations: ["3"]`), or passed a partial `--fees`
+   distribution. That reliably produced `FeeValueMustBeNonZero(N)` with
+   the transaction never reaching the chain. Passing a **complete**
+   `--fees` distribution copied from a real successful on-chain deploy --
+   `rotations: [0]`, `appealRounds: 0`, plus the explicit
+   `executionBudgetPerRound` / gas-price / time-unit-allocation fields --
+   made the transaction broadcast and reach consensus on the first try.
+   The earlier `rotations: [0]`-only attempt failed because the *rest* of
+   the distribution was still missing, which is why that partial test
+   was misread as "rotations makes no difference."
+2. **`--args` argument parsing.** `--args '["0xADDRESS"]'` is parsed as a
+   single argument whose value is a JSON **array**, not as an argument
+   list -- so the contract received `['0x...']` where it expected a
+   string, and the constructor crashed with
+   `AttributeError: 'list' object has no attribute 'encode'`. This was
+   only visible because the transaction finally reached the chain and
+   produced a real GenVM traceback. Correct form for a single string
+   argument: `--args '"0xADDRESS"'` (JSON-quoted). A bare `0x...` would be
+   auto-detected as an *address* type, which this constructor's `str`
+   parameter also rejects.
+
+**The earlier "this is a client-side `genlayer` CLI bug" conclusion in the
+sections below was wrong.** It was a reasonable read of the evidence at
+the time (7 failures, nothing on-chain, other accounts succeeding) but the
+actual cause was recoverable from the caller's side all along. Corrected
+here rather than quietly edited out of the earlier sections, so the
+reasoning trail stays auditable.
+
+### Live verification performed
+
+```
+$ genlayer call 0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3 get_config
+{"chain_id": 61997, "network": "studio-dev", "value_scale": 100, ...}   # real on-chain read
+
+$ genlayer write 0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3 expire_event --args "999999999999" ...
+tx 0x01809ec4ac941cb0b6feba525599153dfc0c1cc13e87cd2da295714fac31fe71
+decoded leader result: b'\x01event not found'   # the contract's OWN UserError, executed on-chain
+```
+
+The write test deliberately targets a nonexistent event id: it proves the
+real write path executes real contract logic and returns the contract's
+own `USER_ERRORS` string from a real consensus round, without spending a
+stake.
+
+### Not yet smoke-tested live, and why
+
+`create_event` (and every other payable method) could **not** be called
+from the CLI: `genlayer write` has no flag for attaching native GEN to a
+payable method (`--help` confirms; the underlying `genlayer-js`
+`writeContract` supports `value`, the CLI simply does not expose it). A
+real `create_event` therefore needs either the frontend with an injected
+wallet, or a direct `genlayer-js` script with a decrypted keystore. This
+is the one remaining unexercised path -- the contract is live and
+verified for reads and non-payable writes, but no GEN has moved through
+it yet.
+
+### A real frontend bug this deploy exposed
+
+`probeContract()` used `eth_getCode` to decide whether a contract is
+live. A GenLayer intelligent contract is **not** an EVM contract:
+`eth_getCode` returns `0x` for this live, responding address. The
+frontend would therefore have shown "No code at this address. Studio Next
+was reset. Redeploy." for a perfectly healthy contract. Fixed to use
+`gen_getContractSchema`, which returns a full method schema for a live
+contract and JSON-RPC error `-32001` for an address with nothing deployed
+-- verified against both the live address and a bogus one. Only an actual
+deploy could have surfaced this.
 
 ## Hosted deploy proof
 

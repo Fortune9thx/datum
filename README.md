@@ -2,9 +2,11 @@
 
 DATUM settles one question on-chain: did a named instrument at a named official station, over a locked window, clear a locked threshold?
 
-**Live app:** https://datum-gamma.vercel.app (marketing site + board/create/stations/portfolio/activity/docs -- fails closed everywhere below, since nothing is deployed yet).
+**Live app:** https://datum-gamma.vercel.app — reading the live contract (board shows the LIVE banner with the deployed address; empty because no events exist yet, never placeholder rows).
 
-**Contract address:** not deployed. Seven documented Studio Dev deploy attempts across two sessions all failed identically and client-side (confirmed via the network's own explorer -- other accounts deploy successfully on this network right now; DATUM's own "reverted" transactions never reached the chain at all). Full evidence trail in [docs/STATUS.md](docs/STATUS.md); a real, passing local execution proof (91 tests: 64 pure-logic + 27 against a live GenVM sandbox, covering every write method's happy and refusal paths) is in [docs/localnet.md](docs/localnet.md) and [docs/STEWARD.md](docs/STEWARD.md).
+**Contract:** live on Studio Next (chain 61997) at [`0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3`](https://explorer-studio-dev.genlayer.com/address/0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3) — deploy tx `0x84b5319b1ca744c47a0c3c36894e69cf3466c0cc3c876f4fcecf8315c440ae03`, ACCEPTED. Verified live: `get_config` returns real on-chain config, and a real write returns the contract's own `event not found` UserError from a real consensus round. Full record in [`deploy/deployments.json`](deploy/deployments.json) and [docs/STATUS.md](docs/STATUS.md).
+
+**Not yet exercised live:** no GEN has moved through the contract yet — `create_event` and the other payable methods need a wallet (the `genlayer` CLI cannot attach value to a payable write). Local proof stands at 91 tests (64 pure-logic + 27 against a live GenVM sandbox), covering every write method's happy *and* refusal path — see [docs/localnet.md](docs/localnet.md).
 
 > "Official station observation at locked publishers for this window."
 
@@ -99,15 +101,20 @@ python -m pytest tests/direct/test_datum_contract.py -q
 
 ## How to deploy
 
-Not currently possible on Studio Dev -- seven real, documented attempts
-across two sessions (a trivial Hello contract and the full DATUM bundle,
-repeatedly, via `genlayer deploy`) all reverted identically with
-`FeeValueMustBeNonZero`. As of 2026-09-25 this is confirmed client-side
-and specific to the `genlayer` CLI (the only released version supporting
-this network) -- the network itself is healthy; DATUM's own "reverted"
-transactions never reached the chain at all. Not an infra-side
-FeeManager issue, not a contract or repo problem. Full proof, exact
-commands, and what to try once it clears: [docs/STATUS.md](docs/STATUS.md).
+Deployed and live. The exact command that worked, after a long run of
+`FeeValueMustBeNonZero` failures, needs BOTH a complete fee distribution
+(not just `--fee-value`) and a JSON-quoted string argument (a bare
+`0x...` is parsed as an address type, and `["0x..."]` is parsed as a
+single array argument):
+
+```bash
+python scripts/build_bundle.py
+genlayer deploy --contract artifacts/Datum.bundled.py   --args '"0xYOUR_TREASURY_ADDRESS"'   --fees '{"distribution":{"rotations":[0],"appealRounds":0,"totalMessageFees":0,"executionConsumed":0,"receiptFeeMaxGasPrice":"300000000","storageFeeMaxGasPrice":"300000000","maxPriceGenPerTimeUnit":"2","executionBudgetPerRound":"94643100000000","leaderTimeunitsAllocation":"100","validatorTimeunitsAllocation":"200"}}'   --fee-value 94643100002588
+```
+
+Full diagnosis of why the earlier attempts failed (and why the earlier
+"client-side CLI bug" conclusion was wrong) is in
+[docs/STATUS.md](docs/STATUS.md).
 A real local execution proof exists in the meantime:
 [docs/localnet.md](docs/localnet.md).
 

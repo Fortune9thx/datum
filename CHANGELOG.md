@@ -333,3 +333,57 @@ Per explicit instruction ("close proof gaps, do not claim Portal-ready"):
   infra-side) deploy-blocker framing.
 - Confirmed: no "100% ready" or "Portal-ready" claim exists anywhere in
   this repository.
+
+## [1.2.0] - 2026-09-25 - DEPLOYED AND LIVE on Studio Next
+
+**Contract address: `0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3`**
+(deploy tx `0x84b5319b1ca744c47a0c3c36894e69cf3466c0cc3c876f4fcecf8315c440ae03`,
+ACCEPTED, chain 61997). `deploy/deployments.json` holds the machine-readable
+record including the bundle's sha256.
+
+- **The deploy blocker is solved, and the earlier diagnosis was wrong.**
+  Previous sessions concluded this was an unfixable client-side bug in
+  the `genlayer` CLI. It was actually two stacked, caller-side problems:
+  (1) every attempt passed only `--fee-value`, letting the CLI derive a
+  `distribution` that reliably produced `FeeValueMustBeNonZero(N)` with
+  nothing reaching the chain -- passing a COMPLETE `--fees` distribution
+  copied from a real successful on-chain deploy (`rotations: [0]`,
+  `appealRounds: 0`, plus explicit `executionBudgetPerRound`, gas prices,
+  and time-unit allocations) broadcast successfully on the first try; and
+  (2) `--args '["0xADDR"]'` is parsed as ONE argument whose value is a
+  JSON array, so the constructor received a list and crashed with
+  `AttributeError: 'list' object has no attribute 'encode'` -- the
+  correct form for a single string argument is `--args '"0xADDR"'`.
+  The earlier wrong conclusion is left in place in `docs/STATUS.md` with
+  a correction on top, rather than edited out, so the reasoning trail
+  stays auditable.
+- **A real frontend bug the deploy exposed and fixed:** `probeContract()`
+  and `checkLiveStatus()` used `eth_getCode` to decide liveness. A
+  GenLayer intelligent contract is not an EVM contract -- `eth_getCode`
+  returns `0x` for this live, responding address, so the frontend would
+  have shown "No code at this address. Studio Next was reset. Redeploy."
+  for a perfectly healthy contract, and every SDK read/write would have
+  refused. Fixed to `gen_getContractSchema` (full schema for a live
+  contract, JSON-RPC `-32001` for nothing-deployed), verified against
+  both the live address and a bogus one. Only a real deploy could have
+  surfaced this.
+- Live verification performed and recorded: `get_config` returns real
+  on-chain config; a real non-payable write
+  (`0x01809ec4ac941cb0b6feba525599153dfc0c1cc13e87cd2da295714fac31fe71`)
+  returns the contract's own `event not found` UserError from a real
+  consensus round, proving the write path executes real contract logic
+  on-chain.
+- `NEXT_PUBLIC_DATUM_CONTRACT_ADDRESS` set in Vercel (production,
+  preview, development) and redeployed. https://datum-gamma.vercel.app
+  now shows the LIVE banner with the address and explorer link, reads
+  real zeros from the real contract, and says "This contract is live and
+  currently holds no events" -- distinct from the not-deployed copy.
+  Verified in-browser, zero console errors.
+- **Still unexercised:** no GEN has moved through the contract. Every
+  payable method (`create_event`, `accept_event`, `adjudicate`, `appeal`,
+  `re_adjudicate`) is uncallable from the CLI -- `genlayer write` has no
+  flag for attaching native GEN, though the underlying `genlayer-js`
+  `writeContract` supports it. A real payable call needs the frontend
+  with an injected wallet or a `genlayer-js` script with a decrypted
+  keystore. Documented as the single biggest remaining gap in
+  `docs/STEWARD.md`.
