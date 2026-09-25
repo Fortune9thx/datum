@@ -19,12 +19,20 @@ os.unlink to swallow exactly that failure so test collection can proceed;
 the OS actually deletes the temp file once fd 0 is closed/reused at
 process exit.
 
-This alone does not fix the deeper, separately-documented local toolchain
-gap (genvm-lint validate/schema and gltest direct-deploy both fail with
-"name 'gl' is not defined" when the sandbox tries to actually load a
-contract module -- see docs/STATUS.md). This shim only removes the
-Windows-specific PermissionError so that deeper failure surfaces cleanly
-instead of being masked by an unrelated crash.
+A DEEPER failure ("name 'gl' is not defined" / genvm-lint validate/schema
+failing the same way) was previously assumed to be a long-standing,
+unresolved local toolchain gap. It turned out to be three real, fixable
+things instead, once actually debugged end-to-end on this project: (1) the
+contract used a stale pre-v0.3.0 genlayer import/API pattern
+(`from genlayer import *`, bare `gl.Contract`/`gl.Event`,
+`gl.vm.run_nondet_unsafe`), (2) `__init__` hand-instantiated its TreeMap
+fields instead of letting the storage generator auto-allocate them, and
+(3) gltest's own `artifacts/` cache directory collided by name with this
+project's bundle output directory and gltest clears it at session start.
+See docs/STATUS.md and CHANGELOG.md for the full writeup -- gltest direct-
+mode deploy and a real create/accept/cancel/adjudicate-guard flow all pass
+end-to-end on this contract now. This shim's own fix (Windows os.unlink)
+remains necessary and unrelated to any of that.
 """
 
 import os

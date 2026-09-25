@@ -75,3 +75,41 @@ All notable changes to this project are documented in this file.
 - Rebuilt `artifacts/Datum.bundled.py` (40881 bytes, still well under the
   52224-byte Studio ceiling) and re-verified `genvm-lint lint` passes
   clean on the bundle.
+
+## [1.1.2] - 2026-09-25 - The local toolchain gap was three fixable bugs, not a wall
+
+- Fixed three real, stacked bugs in `contracts/Datum.py` that made `genvm-lint check/validate/
+  schema` and `gltest` direct-mode deploy fail with the misleading generic symptom
+  `name 'gl' is not defined`, previously assumed to be an unfixable local toolchain gap:
+  1. Stale pre-v0.3.0 API names: `from genlayer import *` (never actually binds `gl`) ->
+     `import genlayer as gl` + `from genlayer.types import *` + `from genlayer.storage import
+     TreeMap`; bare `gl.Contract` -> `gl.contract.Contract`; bare `gl.Event` (used by all 10 event
+     classes) -> `gl.chain.Event`; `gl.vm.run_nondet_unsafe` (does not exist in this SDK) ->
+     `gl.vm.run_nondet`. Verified against the real installed SDK source and against
+     `precedence-settler`'s own contract, which has actually deployed and FINALIZED on this same
+     network with this same Depends hash.
+  2. `Datum.__init__` hand-instantiated its TreeMap fields (`self.events = TreeMap()`, etc). This
+     SDK's storage generator auto-allocates every declared persistent field at class-definition
+     time and rejects a freehand `TreeMap()` call in `__init__` outright (`GenerationError:
+     generic storage classes can not be instantiated with __init__`). Fixed by leaving `__init__`
+     empty -- the auto-allocation already gives every field its correct empty/zero default.
+  3. `gltest`'s own `bundles-v2/` SDK cache lacked the tarball for this project's pinned runner
+     hash under its expected path (an older, differently-laid-out cache existed alongside it from
+     a prior `gltest` version) -- copied into place rather than re-downloaded, avoiding a GitHub
+     rate-limit risk.
+- `tests/direct/test_datum_contract.py` was rewritten to actually deploy (was previously
+  documented as blocked) and now runs a real create/accept/cancel/adjudicate-guard flow against a
+  live GenVM sandbox: 9/9 passing, including real GEN attached via `direct_vm.value` and a second
+  account via `direct_vm.prank(...)`. `CONTRACT_PATH` now points at `artifacts/Datum.bundled.py`
+  (the file that actually has `datum_lib`'s functions inlined) instead of the un-bundled source,
+  and the `contract` fixture rebuilds the bundle itself immediately before each deploy, since
+  gltest clears its own `artifacts/` directory (name collision with the bundler's output dir) at
+  session start.
+- In passing, found and left as-is (documented, not fixed, since it's not a functional bug): a
+  second `accept_event` on an already-ACTIVE event surfaces `"not open"` rather than the more
+  specific `"already accepted"` string, because the state check runs first -- both correctly
+  refuse the second accept, only the diagnostic message differs.
+- `genvm-lint check`/`validate`/`schema` all now pass cleanly on the bundle (22 methods: 10 view,
+  12 write). Full detail in `docs/STATUS.md`; the underlying toolchain finding is recorded in
+  project memory (`genlayer-consensus-v06-migration-findings`,
+  `genlayer-treemap-explicit-init-safe`) for reuse on future GenLayer projects on this machine.

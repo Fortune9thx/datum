@@ -3,7 +3,9 @@ import hashlib
 import json
 import re
 from datetime import datetime, timezone
-from genlayer import *
+import genlayer as gl
+from genlayer.types import *
+from genlayer.storage import TreeMap
 VALUE_SCALE = 100
 MIN_BET = 10 ** 16
 MAX_BET = 1000 * 10 ** 18
@@ -338,57 +340,57 @@ def _addr(a) -> str:
 def _sender() -> str:
     return str(gl.message.sender_address)
 
-class EventCreated(gl.Event):
+class EventCreated(gl.chain.Event):
 
     def __init__(self, event_id: str, creator: Address, instrument_class: str, /):
         ...
 
-class EventAccepted(gl.Event):
+class EventAccepted(gl.chain.Event):
 
     def __init__(self, event_id: str, acceptor: Address, side: str, /):
         ...
 
-class EventAdjudicated(gl.Event):
+class EventAdjudicated(gl.chain.Event):
 
     def __init__(self, event_id: str, verdict: str, code: str, /):
         ...
 
-class EventFinalized(gl.Event):
+class EventFinalized(gl.chain.Event):
 
     def __init__(self, event_id: str, verdict: str, /):
         ...
 
-class EventCanceled(gl.Event):
+class EventCanceled(gl.chain.Event):
 
     def __init__(self, event_id: str, /):
         ...
 
-class EventExpired(gl.Event):
+class EventExpired(gl.chain.Event):
 
     def __init__(self, event_id: str, /):
         ...
 
-class EventAppealed(gl.Event):
+class EventAppealed(gl.chain.Event):
 
     def __init__(self, event_id: str, appellant: Address, ground: str, /):
         ...
 
-class EventLapsedAppeal(gl.Event):
+class EventLapsedAppeal(gl.chain.Event):
 
     def __init__(self, event_id: str, /):
         ...
 
-class Claimed(gl.Event):
+class Claimed(gl.chain.Event):
 
     def __init__(self, event_id: str, claimant: Address, amount: u256, /):
         ...
 
-class RefundRecovered(gl.Event):
+class RefundRecovered(gl.chain.Event):
 
     def __init__(self, event_id: str, /):
         ...
 
-class Datum(gl.Contract):
+class Datum(gl.contract.Contract):
     events: TreeMap[str, str]
     positions: TreeMap[str, str]
     creator_open_count: TreeMap[str, u256]
@@ -398,13 +400,7 @@ class Datum(gl.Contract):
     treasury_balance: u256
 
     def __init__(self):
-        self.events = TreeMap()
-        self.positions = TreeMap()
-        self.creator_open_count = TreeMap()
-        self.address_events = TreeMap()
-        self.claimable = TreeMap()
-        self.event_counter = u256(0)
-        self.treasury_balance = u256(0)
+        pass
 
     def _load_event(self, event_id: str) -> dict:
         raw = self.events.get(event_id)
@@ -538,7 +534,7 @@ class Datum(gl.Contract):
                 return False
             evaluation = evaluate_envelope(instrument_class=instrument_class, expected_station_id=station_id, expected_bbox=bbox, window=window, product_status_policy=policy, tolerance_scaled=rec['tolerance'], threshold_scaled=rec['threshold'], cmp_op=rec['cmp'], envelope=envelope)
             return bool(evaluation['accepted'])
-        raw_envelope = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
+        raw_envelope = gl.vm.run_nondet(leader_fn, validator_fn)
         try:
             envelope = json.loads(str(raw_envelope))
         except (json.JSONDecodeError, TypeError):
