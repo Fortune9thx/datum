@@ -8,6 +8,7 @@ import {
   getChainId,
   getProvider,
   hasWallet,
+  onWalletDiscovered,
   shortAddress,
   switchToStudioNext,
 } from "@/src/lib/datum/wallet";
@@ -43,18 +44,51 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    setAvailable(hasWallet());
-    if (!hasWallet()) return;
-    void refresh();
+    let cancelled = false;
+    let attached = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let provider: ReturnType<typeof getProvider> = null;
+    let onAccounts: (() => void) | null = null;
+    let onChain: (() => void) | null = null;
 
-    const provider = getProvider();
-    const onAccounts = () => void refresh();
-    const onChain = () => void refresh();
-    provider?.on?.("accountsChanged", onAccounts);
-    provider?.on?.("chainChanged", onChain);
+    function attach() {
+      if (attached || cancelled) return;
+      const found = hasWallet();
+      setAvailable(found);
+      if (!found) return;
+      attached = true;
+      if (timer) clearInterval(timer);
+      void refresh();
+
+      provider = getProvider();
+      onAccounts = () => void refresh();
+      onChain = () => void refresh();
+      provider?.on?.("accountsChanged", onAccounts);
+      provider?.on?.("chainChanged", onChain);
+    }
+
+    // Injection is an async content script -- a wallet extension can
+    // announce itself after this effect first runs. Retry briefly instead
+    // of deciding "no wallet" from a single synchronous check.
+    attach();
+    let attempts = 0;
+    timer = setInterval(() => {
+      if (attached || cancelled || attempts >= 20) {
+        if (timer) clearInterval(timer);
+        return;
+      }
+      attempts += 1;
+      attach();
+    }, 150);
+
+    const unsubscribe = onWalletDiscovered(attach);
+
     return () => {
-      provider?.removeListener?.("accountsChanged", onAccounts);
-      provider?.removeListener?.("chainChanged", onChain);
+      cancelled = true;
+      if (timer) clearInterval(timer);
+      unsubscribe();
+      provider?.removeListener?.("accountsChanged", onAccounts!);
+      provider?.removeListener?.("chainChanged", onChain!);
     };
   }, [refresh]);
 

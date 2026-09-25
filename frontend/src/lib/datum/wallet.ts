@@ -3,6 +3,16 @@
  *
  * This module never holds, reads, or accepts a private key. It asks the
  * injected provider to connect, and to add/switch to 61997 -- nothing else.
+ *
+ * Discovery uses EIP-6963 (`eip6963:announceProvider`), not a bare
+ * `window.ethereum` read: with more than one wallet extension installed
+ * (MetaMask + Coinbase Wallet + Phantom, a common setup), only one of them
+ * can own that global, so relying on it alone silently misses every other
+ * wallet. EIP-6963 has each wallet announce itself independently instead.
+ * `window.ethereum` is kept as a fallback for wallets that only support the
+ * legacy path. Detection also has to tolerate the announce arriving after
+ * this module has already loaded -- injection is an async content script,
+ * not something guaranteed to exist by the time React mounts.
  */
 
 import { STUDIO_DEV_CHAIN_ID, studioDevChainParams } from "./network";
@@ -19,8 +29,40 @@ declare global {
   }
 }
 
+interface Eip6963ProviderDetail {
+  info: { uuid: string; name: string };
+  provider: Eip1193Provider;
+}
+
+const discovered = new Map<string, Eip1193Provider>();
+const listeners = new Set<() => void>();
+
+function notify() {
+  listeners.forEach((fn) => fn());
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("eip6963:announceProvider", ((event: CustomEvent<Eip6963ProviderDetail>) => {
+    const { info, provider } = event.detail ?? {};
+    if (!info?.uuid || !provider) return;
+    const isNew = !discovered.has(info.uuid);
+    discovered.set(info.uuid, provider);
+    if (isNew) notify();
+  }) as EventListener);
+  window.dispatchEvent(new Event("eip6963:requestProvider"));
+}
+
+/** Re-runs `fn` whenever a new wallet is discovered after this call (e.g. a
+ * late EIP-6963 announce). Returns an unsubscribe function. */
+export function onWalletDiscovered(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
 export function getProvider(): Eip1193Provider | null {
   if (typeof window === "undefined") return null;
+  const first = discovered.values().next();
+  if (!first.done) return first.value;
   return window.ethereum ?? null;
 }
 
