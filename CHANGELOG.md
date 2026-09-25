@@ -176,3 +176,40 @@ registration order and returns the FIRST match for a repeated pattern,
 not the most recent -- `direct_vm.clear_mocks()` before re-registering
 for a second scenario is required (a previously-documented gotcha on this
 machine, re-confirmed here).
+
+## [1.1.4] - 2026-09-25 - claim() was completely broken; network re-investigation
+
+- **Critical fix: `claim()` -- the ONLY method that ever moves GEN out of
+  the contract -- called `gl.get_contract_at(...)`, a stale pre-v0.3.0
+  name that does not exist on the current SDK at all.** Confirmed via a
+  new real `gltest` test that actually calls `claim()` (no prior test
+  ever had): `AttributeError: module 'genlayer' has no attribute
+  'get_contract_at'`, on every single call. Fixed to `gl.contract.get_at(...)`,
+  cross-checked against the official migration guide
+  (sdk.genlayer.com/main/executors/v0.3/python-sdk/migration-guide.html),
+  which also independently confirmed every other API rename made in this
+  project's earlier 1.1.2 fix (`gl.contract.Contract`, `gl.chain.Event`,
+  `gl.vm.run_nondet`, the import pattern) was correct. Added
+  `TestClaimActuallyPaysOut` (2 tests) -- 13/13 direct-mode tests now
+  pass, and `claim()` specifically is exercised for the first time.
+- Independently confirmed the pinned `Depends` hash
+  (`5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng`) is a real,
+  current, documented runner
+  (sdk.genlayer.com/main/executors/v0.3/python-sdk/available-runners.html,
+  "GenVM Executor v0.3.0-rc9") -- not stale.
+- **Re-investigated the Studio Dev deploy blocker at a steward's request
+  to check the explorer.** The 2026-09-24 writeup's conclusion ("hosted
+  deploy path is not currently usable") was too broad. The network is
+  healthy -- other accounts' transactions, including a deploy of the
+  identical official example contract with this project's own Depends
+  hash, are FINALIZING right now. This project's own "reverted"
+  transaction hashes were never found on-chain at all
+  (`{"detail":"Transaction not found"}` on the explorer for every one) --
+  the CLI's "Transaction reverted" message describes a client-side
+  failure, not a real on-chain revert. Narrowed to: this is a real,
+  reproducible bug in the `genlayer` CLI's `deploy` command specifically
+  (v0.40.0-rc.3, the only released version supporting Studio Next at all
+  -- the stable 0.39.2 channel doesn't know the network exists), failing
+  identically across contract size, `--args`, and `--fee-value`
+  magnitude. Full evidence trail and untried next steps (Studio UI, a
+  raw `genlayer-js` script bypassing the CLI) in `docs/STATUS.md`.

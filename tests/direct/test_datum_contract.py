@@ -359,3 +359,51 @@ class TestAppealBondResolution:
 
         bob_claimable = json.loads(contract.get_claimable(address=str(direct_bob), cursor=0, limit=1))
         assert int(bob_claimable["claimable"]) >= self.APPEAL_BOND
+
+
+class TestClaimActuallyPaysOut:
+    """Regression coverage for a real, critical bug found while
+    cross-checking against the official SDK migration guide
+    (sdk.genlayer.com/main/executors/v0.3/python-sdk/migration-guide.html):
+    claim() -- the ONLY method in the whole contract that ever moves GEN
+    out -- called `gl.get_contract_at(...)`, a stale pre-v0.3.0 name that
+    does not exist on the current genlayer package at all
+    (AttributeError: module 'genlayer' has no attribute 'get_contract_at').
+    Every single claim() call would have reverted, on any real deploy,
+    with no way to ever withdraw credited GEN. No test had ever actually
+    called claim() before this one -- every prior test checked
+    get_claimable() (a view) but never the write that pays it out. Fixed
+    to gl.contract.get_at(...), the current name for the same Proxy the
+    write's own emit_transfer() call needs."""
+
+    def test_claim_pays_out_and_zeroes_the_ledger(self, contract, direct_vm, direct_alice):
+        with direct_vm.prank(direct_alice):
+            direct_vm.value = STAKE + CREATE_BOND
+            event_id = contract.create_event(
+                constitution_json=_precip_constitution(), side="YES", stake=str(STAKE)
+            )
+            contract.cancel_event(event_id=event_id)
+
+            claimable_before = json.loads(
+                contract.get_claimable(address=str(direct_alice), cursor=0, limit=1)
+            )
+            assert int(claimable_before["claimable"]) == STAKE + CREATE_BOND
+
+            paid = contract.claim(event_id=event_id)
+            assert int(paid) == STAKE + CREATE_BOND
+
+            claimable_after = json.loads(
+                contract.get_claimable(address=str(direct_alice), cursor=0, limit=1)
+            )
+            assert int(claimable_after["claimable"]) == 0
+
+    def test_claim_with_nothing_owed_rejected(self, contract, direct_vm, direct_alice, direct_bob):
+        with direct_vm.prank(direct_alice):
+            direct_vm.value = STAKE + CREATE_BOND
+            event_id = contract.create_event(
+                constitution_json=_precip_constitution(), side="YES", stake=str(STAKE)
+            )
+        # bob has no claimable balance on this event at all.
+        with direct_vm.prank(direct_bob):
+            with pytest.raises(Exception, match=re.escape("nothing to claim")):
+                contract.claim(event_id=event_id)

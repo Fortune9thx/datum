@@ -62,13 +62,29 @@ end):**
    bond can be recorded) -- but never credited the *previous* adjudicator
    anything first. Fixed: `re_adjudicate()` now credits the outgoing
    adjudicator's bond back before resetting those fields.
+5. **The single most severe of these, found separately: `claim()` itself
+   -- the ONLY method in the entire contract that ever moves GEN out --
+   called `gl.get_contract_at(...)`, a name that does not exist on the
+   current SDK at all.** Every real call to `claim()` would have thrown
+   `AttributeError` and reverted, meaning nobody could ever actually
+   withdraw credited GEN, on any real deploy, ever. No test had exercised
+   `claim()` at all until this was found (every prior test checked
+   `get_claimable()`, a view, never the write that pays it out). Fixed to
+   `gl.contract.get_at(...)`, confirmed against the official SDK
+   migration guide. See CHANGELOG.md's 1.1.4 entry.
 
-All four are covered by real `gltest` direct-mode tests
-(`TestAppealBondResolution` in `test_datum_contract.py`) that deploy,
-run a full create -> accept -> adjudicate -> appeal -> re_adjudicate ->
-finalize lifecycle with a mocked LLM response, and assert the exact
-resulting ledger balances -- not just that the code compiles or that a
-unit test of the pure math passes in isolation.
+All five are covered by real `gltest` direct-mode tests
+(`TestAppealBondResolution` and `TestClaimActuallyPaysOut` in
+`test_datum_contract.py`) that deploy, run a full create -> accept ->
+adjudicate -> appeal -> re_adjudicate -> finalize -> claim lifecycle
+with a mocked LLM response, and assert the exact resulting ledger
+balances and actual payouts -- not just that the code compiles or that a
+unit test of the pure math passes in isolation. **General lesson from
+this whole audit pass: a passing unit-test suite for pure logic, and even
+a passing integration-test suite that never calls the one method that
+actually pays people, both create false confidence. Write at least one
+test per write method that has any value-transfer effect, and assert the
+transfer actually happened, not just that the call didn't throw.**
 
 **Leftover:** `claim()`'s last-claimant-absorbs-dust pattern
 (`payout_shares` integer division, tested in `TestEconomics`) means the

@@ -727,7 +727,7 @@ class Datum(gl.contract.Contract):
         if owed <= 0:
             raise gl.vm.UserError(USER_ERRORS['NOTHING_TO_CLAIM'])
         self.claimable[sender] = u256(0)
-        gl.get_contract_at(gl.message.sender_address).emit_transfer(value=u256(owed))
+        gl.contract.get_at(gl.message.sender_address).emit_transfer(value=u256(owed))
         Claimed(event_id, gl.message.sender_address, u256(owed)).emit()
         return u256(owed)
 
