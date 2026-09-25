@@ -328,13 +328,26 @@ class Datum(gl.contract.Contract):
             return envelope
 
         def validator_fn(leader_result) -> bool:
-            # Code re-derives the verdict/code from the leader's structured
-            # sources -- it NEVER trusts leader_result's own verdict/code.
+            # Never validate the leader's own claimed output structurally
+            # only -- re-acquire the evidence independently (re-run
+            # leader_fn from scratch: a fresh gl.nondet.exec_prompt call,
+            # not a re-read of leader_result) and compare the two
+            # independently-derived outcomes. A leader that fabricated a
+            # self-consistent-but-fictional envelope would pass a
+            # structural-only check; it cannot pass this one unless this
+            # validator's own independent fetch agrees.
             try:
-                envelope = json.loads(str(leader_result))
+                leader_envelope = json.loads(str(leader_result))
             except (json.JSONDecodeError, TypeError):
                 return False
-            evaluation = evaluate_envelope(
+
+            my_raw = leader_fn()
+            try:
+                my_envelope = json.loads(str(my_raw))
+            except (json.JSONDecodeError, TypeError):
+                return False
+
+            leader_eval = evaluate_envelope(
                 instrument_class=instrument_class,
                 expected_station_id=station_id,
                 expected_bbox=bbox,
@@ -343,9 +356,26 @@ class Datum(gl.contract.Contract):
                 tolerance_scaled=rec["tolerance"],
                 threshold_scaled=rec["threshold"],
                 cmp_op=rec["cmp"],
-                envelope=envelope,
+                envelope=leader_envelope,
             )
-            return bool(evaluation["accepted"])
+            my_eval = evaluate_envelope(
+                instrument_class=instrument_class,
+                expected_station_id=station_id,
+                expected_bbox=bbox,
+                window=window,
+                product_status_policy=policy,
+                tolerance_scaled=rec["tolerance"],
+                threshold_scaled=rec["threshold"],
+                cmp_op=rec["cmp"],
+                envelope=my_envelope,
+            )
+            if not leader_eval["accepted"] or not my_eval["accepted"]:
+                return False
+            return (
+                leader_eval["verdict"] == my_eval["verdict"]
+                and leader_eval["code"] == my_eval["code"]
+                and leader_eval["agreed_value"] == my_eval["agreed_value"]
+            )
 
         raw_envelope = gl.vm.run_nondet(leader_fn, validator_fn)
 

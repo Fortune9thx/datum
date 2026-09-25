@@ -9,8 +9,14 @@ import { ActionButton, WriteNote, useWriteGate } from "@/src/components/actions"
 import { useWallet } from "@/src/components/Wallet";
 import { getEvent, getRecord, write } from "@/src/lib/datum/sdk";
 import { CLASSES, STATE_LABELS } from "@/src/lib/datum/registry";
-import { formatGen, formatScaledValue, formatWindowCompact } from "@/src/lib/datum/format";
+import { formatGen, formatScaledValue, formatWindowCompact, parseGenToWei } from "@/src/lib/datum/format";
 import type { DatumEvent, DatumRecord, SourceRow } from "@/src/lib/datum/types";
+
+// Immutable economics, must match contracts/datum_lib.py exactly --
+// ADJUDICATE_BOND = 2 * 10**16 (0.02 GEN). accept_event's required value
+// is the event's own creator_stake, read from the loaded record instead
+// (it varies per event, unlike the bond).
+const ADJUDICATE_BOND_GEN = "0.02";
 
 export default function TicketPage() {
   const params = useParams<{ id: string }>();
@@ -144,19 +150,25 @@ export default function TicketPage() {
                 <ActionButton
                   label="Accept YES"
                   reason={reason}
-                  run={() => write.acceptEvent(account, eventId, "YES", 0n)}
+                  run={() =>
+                    write.acceptEvent(account, eventId, "YES", BigInt(event.creator_stake))
+                  }
                 />
                 <ActionButton
                   label="Accept NO"
                   reason={reason}
                   ghost
-                  run={() => write.acceptEvent(account, eventId, "NO", 0n)}
+                  run={() =>
+                    write.acceptEvent(account, eventId, "NO", BigInt(event.creator_stake))
+                  }
                 />
                 <ActionButton
                   label="Adjudicate"
                   reason={reason}
                   ghost
-                  run={() => write.adjudicate(account, eventId, 0n)}
+                  run={() =>
+                    write.adjudicate(account, eventId, BigInt(parseGenToWei(ADJUDICATE_BOND_GEN)))
+                  }
                 />
                 <ActionButton
                   label="Finalize"

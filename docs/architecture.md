@@ -83,13 +83,33 @@ breaking read-side change.
 validator_fn)` call. `leader_fn` calls `gl.nondet.exec_prompt` once with a
 frozen prompt template (`_adjudication_prompt`) built only from plain,
 already-validated local values (never `self.*`, so no consensus-state leak
-into the closure). `validator_fn` parses the leader's returned JSON and
-runs it through `datum_lib.evaluate_envelope` -- the exact same function
-called again, deterministically, on the accepted `raw_envelope` afterward
-to derive the stored verdict/code/agreed_value. This means the "does code
-trust the model's own verdict field" question has one factual answer:
-no -- `evaluate_envelope` always re-derives verdict/code from
-`envelope["sources"]` and rejects the whole envelope on any mismatch.
+into the closure). `validator_fn` **calls `leader_fn()` again itself** --
+a fresh, independent `gl.nondet.exec_prompt` call, not a re-read of the
+leader's own claimed result -- runs `datum_lib.evaluate_envelope` on BOTH
+the leader's envelope and its own independently-fetched one, and only
+accepts if the two independently-derived (verdict, code, agreed_value)
+outcomes agree. A leader that fabricated a self-consistent-but-fictional
+envelope (right shape, internally coherent, but not what the real
+publishers actually returned) would pass a structural-only check; it
+cannot pass this one unless the validator's own independent fetch agrees.
+
+This was a real, confirmed bug in an earlier version of this contract:
+`validator_fn` originally only ran `evaluate_envelope` on the LEADER's own
+claimed JSON, checking internal self-consistency (does the claimed
+verdict match the claimed sources) without ever independently re-acquiring
+the underlying publisher data itself. That is exactly the pattern behind
+multiple real GenLayer steward rejections on prior projects on this
+machine (project memory `genlayer-master-audit-prompt` items 4/60/65:
+"a validator function that only checks the leader's output is well-formed
+... without independently re-deriving its own answer ... will be rejected
+by GenLayer stewards"). Fixed by having `validator_fn` call `leader_fn()`
+a second time and compare two independent derivations, per the
+established correct pattern -- both to `evaluate_envelope` calls' outputs,
+never to the leader's own claimed verdict/code fields directly. This means
+the "does code trust the model's own verdict field, or even the model's
+own claimed evidence" question has one factual answer: no -- every
+accepted record reflects two independently-executed prompt calls that
+agreed, not one call trusted at face value.
 
 ## Why `run_nondet` and not `strict_eq`
 

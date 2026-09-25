@@ -516,11 +516,19 @@ class Datum(gl.contract.Contract):
 
         def validator_fn(leader_result) -> bool:
             try:
-                envelope = json.loads(str(leader_result))
+                leader_envelope = json.loads(str(leader_result))
             except (json.JSONDecodeError, TypeError):
                 return False
-            evaluation = evaluate_envelope(instrument_class=instrument_class, expected_station_id=station_id, expected_bbox=bbox, window=window, product_status_policy=policy, tolerance_scaled=rec['tolerance'], threshold_scaled=rec['threshold'], cmp_op=rec['cmp'], envelope=envelope)
-            return bool(evaluation['accepted'])
+            my_raw = leader_fn()
+            try:
+                my_envelope = json.loads(str(my_raw))
+            except (json.JSONDecodeError, TypeError):
+                return False
+            leader_eval = evaluate_envelope(instrument_class=instrument_class, expected_station_id=station_id, expected_bbox=bbox, window=window, product_status_policy=policy, tolerance_scaled=rec['tolerance'], threshold_scaled=rec['threshold'], cmp_op=rec['cmp'], envelope=leader_envelope)
+            my_eval = evaluate_envelope(instrument_class=instrument_class, expected_station_id=station_id, expected_bbox=bbox, window=window, product_status_policy=policy, tolerance_scaled=rec['tolerance'], threshold_scaled=rec['threshold'], cmp_op=rec['cmp'], envelope=my_envelope)
+            if not leader_eval['accepted'] or not my_eval['accepted']:
+                return False
+            return leader_eval['verdict'] == my_eval['verdict'] and leader_eval['code'] == my_eval['code'] and (leader_eval['agreed_value'] == my_eval['agreed_value'])
         raw_envelope = gl.vm.run_nondet(leader_fn, validator_fn)
         try:
             envelope = json.loads(str(raw_envelope))

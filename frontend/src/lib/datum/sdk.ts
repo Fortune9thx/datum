@@ -170,8 +170,12 @@ export const write = {
   appeal: (account: `0x${string}`, eventId: string, ground: string, value: bigint) =>
     submitWrite({ account, functionName: "appeal", args: [eventId, ground], value }),
 
-  reAdjudicate: (account: `0x${string}`, eventId: string) =>
-    submitWrite({ account, functionName: "re_adjudicate", args: [eventId] }),
+  // re_adjudicate() is payable: its whole body calls the contract's own
+  // adjudicate() in the same call frame, which requires exactly
+  // ADJUDICATE_BOND attached (see contracts/Datum.py) -- omitting value
+  // here would revert with "stake mismatch" on every real call.
+  reAdjudicate: (account: `0x${string}`, eventId: string, value: bigint) =>
+    submitWrite({ account, functionName: "re_adjudicate", args: [eventId], value }),
 
   lapseAppeal: (account: `0x${string}`, eventId: string) =>
     submitWrite({ account, functionName: "lapse_appeal", args: [eventId] }),

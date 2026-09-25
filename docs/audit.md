@@ -137,28 +137,54 @@ next day.
 ## Witness (publisher) mismatch
 
 **Risk:** the leader claims two publishers agree when their underlying
-readings actually differ, or claims a verdict that doesn't match what the
-sources actually show.
+readings actually differ or don't exist at all -- either misreporting
+agreement between real sources, or fabricating an entire envelope out of
+whole cloth.
 
-**Mitigation:** this is the contract's central invariant.
-`evaluate_envelope` never trusts the leader's own `verdict`/`code`
-fields -- it independently re-derives both from the envelope's
-`sources` rows (via `aggregate_sources` + `apply_threshold`) and rejects
-the whole envelope (`accepted=False`, no funds move) if the leader's
-claim doesn't match the independent derivation exactly. This re-derivation
-runs identically inside `validator_fn` for every validator, not just
-once for the leader -- so a leader misreporting agreement gets caught by
-consensus, not just by the contract's own bookkeeping.
+**Confirmed and fixed this session (strict-audit pass, 2026-09-25):**
+`evaluate_envelope` has always independently re-derived verdict/code from
+the envelope's `sources` rows rather than trusting the leader's own
+`verdict`/`code` fields -- that part was correct from the start. But
+`validator_fn` originally only ran that re-derivation on the LEADER's OWN
+claimed JSON -- checking that the leader's claimed verdict matched the
+leader's claimed sources (internal self-consistency), without ever
+independently re-acquiring the underlying publisher data itself. **That is
+exactly the pattern behind multiple real, confirmed GenLayer steward
+rejections on prior projects on this machine** (project memory
+`genlayer-master-audit-prompt` items 4/60/65 -- real rejection text: "the
+contract's validator checks only that the leader returned well-formed
+answer/reasoning strings; it never independently derives or verifies the
+answer... conflicting substantive answers can pass validation"). A leader
+that fabricated a self-consistent-but-fictional envelope (right shape,
+internally coherent verdict-matches-sources, but not what the real
+publishers actually returned) would have passed the original
+`validator_fn` outright.
+
+**Mitigation, now real:** `validator_fn` calls `leader_fn()` again itself
+-- a fresh, independent `gl.nondet.exec_prompt` call -- runs
+`evaluate_envelope` on both the leader's envelope and its own
+independently-fetched one, and only accepts if the two independently-
+derived outcomes agree. See `docs/architecture.md`'s "non-deterministic
+adjudication call" section for the full before/after. Verified via the
+existing 13 `gltest` direct-mode tests, all still passing after the
+change (the appeal/re-adjudicate lifecycle tests in particular exercise
+`adjudicate()` end to end, including this new double-fetch path).
 
 **Leftover:** documented in `docs/localnet.md` -- this project's own
-`gltest` direct-mode proof does not exercise genuine multi-validator
-disagreement (a single-process mock has one leader, not real independent
-validators). The re-derivation logic itself is thoroughly unit-tested in
-`datum_lib.py`'s `TestEvaluateEnvelope` (agree -> YES/NO, missing ->
-INCONCLUSIVE, conflict -> INCONCLUSIVE, station mismatch, preliminary
-blocked, quake-outside-bbox, volatile-key neutralization, different raw
-JSON converging on the same accepted record), but a live multi-validator
-disagreement scenario has not been captured end-to-end on a real network.
+`gltest` direct-mode proof still cannot exercise genuine multi-*validator*
+disagreement (a single-process mock has one leader and validator logic
+runs in-process; it cannot simulate two real, independent GenVM nodes
+actually disagreeing at the network level). What changed is that
+`validator_fn` NOW performs a real second, independent fetch+derivation
+before comparing -- previously it performed zero independent fetches at
+all, which was the more serious gap. The re-derivation logic itself
+remains thoroughly unit-tested in `datum_lib.py`'s `TestEvaluateEnvelope`
+(agree -> YES/NO, missing -> INCONCLUSIVE, conflict -> INCONCLUSIVE,
+station mismatch, preliminary blocked, quake-outside-bbox, volatile-key
+neutralization, different raw JSON converging on the same accepted
+record), but a live multi-validator disagreement scenario has not been
+captured end-to-end on a real network -- and could not be, structurally,
+by this mock.
 
 ## Spam creates
 
@@ -247,10 +273,16 @@ correctly; only the diagnostic message differs. See
 
 ## Known, honestly-documented gaps (not hidden)
 
-1. **Studio Dev hosted deploy is currently blocked**, infra-side
-   (`FeeValueMustBeNonZero`), confirmed via two real attempts across
-   three fee-parameter configurations. Not a contract bug -- see
-   `docs/STATUS.md`.
+1. **Studio Dev hosted deploy is currently blocked.** Originally written
+   up as an infra-side `FeeValueMustBeNonZero` issue; re-investigated
+   2026-09-25 (see `docs/STATUS.md`) and narrowed further -- the network
+   itself is healthy (other accounts' transactions, including a deploy of
+   the identical official example with this project's own `Depends`
+   hash, are finalizing live), and this project's own "reverted"
+   transaction hashes were never found on-chain at all. The failure is
+   client-side, specific to the `genlayer` CLI's `deploy` command
+   (v0.40.0-rc.3, the only released version supporting Studio Next at
+   all). Not a contract bug either way.
 2. **`re_adjudicate` on an appeal ground of VALUE/STATION/WINDOW/STATUS**
    re-runs the *same* `adjudicate()` non-deterministic path rather than a
    literally separate "replay stored bytes only" code path -- the
@@ -271,3 +303,30 @@ correctly; only the diagnostic message differs. See
    enforcement (the primary QUAKES safety property) is code-enforced;
    depth is not. Worth closing in a follow-up if QUAKES events with a
    non-default depth see real use.
+5. **Six of the twelve write methods have no frontend UI at all yet:**
+   `appeal`, `re_adjudicate`, `lapse_appeal`, `cancel_event`,
+   `expire_event`, and `reclaim_bonds` are all correctly implemented in
+   `frontend/src/lib/datum/sdk.ts` (and, for `re_adjudicate`, correctly
+   fixed this session to attach `ADJUDICATE_BOND` -- see item 6 below) but
+   are not called from any page or button in `frontend/app/`. A steward
+   reading `docs/STATUS.md`'s "no contract deployed yet" framing should
+   not read that as "the write path is otherwise complete" -- roughly
+   half of it has no UI entry point regardless of deploy status. The six
+   that ARE wired (`create_event`, `accept_event`, `adjudicate`,
+   `finalize`, `claim`, `recover_refund`) were verified end-to-end against
+   the SDK's actual parameter signatures this session (see item 6).
+6. **Two real, confirmed frontend/SDK bugs found and fixed this
+   session**, found by actually reading every wired call site against its
+   contract-side requirement rather than trusting that "the button exists"
+   meant "the button works": (a) `frontend/app/app/e/[id]/page.tsx`'s
+   Accept YES/NO and Adjudicate buttons all hardcoded `0n` for the
+   attached value, when `accept_event` requires exactly the event's
+   `creator_stake` and `adjudicate` requires exactly `ADJUDICATE_BOND` --
+   every real click would have reverted with `stake mismatch`; (b)
+   `write.reAdjudicate` in `sdk.ts` had no `value` parameter at all, so
+   even if a re-adjudicate button existed (it doesn't yet, see item 5) it
+   would have reverted the same way, since `re_adjudicate()` internally
+   calls `adjudicate()` in the same call frame and inherits its exact
+   `ADJUDICATE_BOND` requirement. Both fixed; verified via a clean
+   `next build` (type-checks the corrected call sites) since there is no
+   live contract yet to exercise a real click against.

@@ -213,3 +213,47 @@ machine, re-confirmed here).
   identically across contract size, `--args`, and `--fee-value`
   magnitude. Full evidence trail and untried next steps (Studio UI, a
   raw `genlayer-js` script bypassing the CLI) in `docs/STATUS.md`.
+
+## [1.1.5] - 2026-09-25 - Validator independence and frontend value-attachment bugs
+
+Per-user request: stored this session's major findings as new items
+(181-184) in this account's master GenLayer audit checklist, then ran a
+strict, assumption-free re-audit of the current codebase against the full
+184-item list.
+
+- **Confirmed steward-rejection-pattern bug, now fixed: `adjudicate()`'s
+  `validator_fn` only checked the leader's own claimed envelope for
+  internal self-consistency, never independently re-acquiring the
+  underlying publisher data itself.** This is exactly the pattern behind
+  multiple real, confirmed GenLayer steward rejections recorded in
+  project memory (checklist items 4/60/65 -- "a validator function that
+  only checks the leader's output is well-formed... without independently
+  re-deriving its own answer... will be rejected"). A leader that
+  fabricated a self-consistent-but-fictional envelope would have passed
+  the original check outright. Fixed: `validator_fn` now calls
+  `leader_fn()` again itself (a fresh, independent
+  `gl.nondet.exec_prompt` call) and only accepts when its own
+  independently-derived (verdict, code, agreed_value) matches the
+  leader's. Verified via the existing 13 gltest direct-mode tests, all
+  still passing unchanged. See docs/architecture.md and docs/audit.md's
+  "Witness mismatch" section for the full writeup.
+- **Two real frontend/SDK value-attachment bugs, found by checking every
+  wired write call site against its contract-side requirement:**
+  `app/app/e/[id]/page.tsx`'s Accept YES/NO and Adjudicate buttons all
+  hardcoded `0n` for attached value (should be the event's `creator_stake`
+  and `ADJUDICATE_BOND` respectively) -- every real click would have
+  reverted with `stake mismatch`. `sdk.ts`'s `write.reAdjudicate` had no
+  `value` parameter at all, despite `re_adjudicate()` internally
+  requiring `ADJUDICATE_BOND` (it calls `adjudicate()` in the same call
+  frame). Both fixed; `next build` passes clean.
+- Documented, not fixed (real but out of scope for a bug-fix pass): six
+  of twelve write methods (`appeal`, `re_adjudicate`, `lapse_appeal`,
+  `cancel_event`, `expire_event`, `reclaim_bonds`) have no frontend UI
+  entry point at all yet, independent of the contract-deploy blocker.
+- A background agent's claim that "zero write methods are called anywhere
+  in the frontend" was checked and found FALSE (a bad grep path) before
+  being acted on -- six of twelve genuinely are wired, which is how the
+  two real bugs above were actually found (by reading the wired ones, not
+  by trusting the agent's blanket claim). Recorded as a reminder to
+  verify agent-reported findings against the real codebase before fixing
+  or documenting them as fact.
