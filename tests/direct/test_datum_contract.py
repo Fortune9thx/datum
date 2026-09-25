@@ -49,6 +49,7 @@ CONTRACT_PATH = "artifacts/Datum.bundled.py"
 NOW_PLACEHOLDER = 1_800_000_000
 STAKE = 10**18  # 1 GEN
 CREATE_BOND = 5 * 10**16  # 0.05 GEN, must match datum_lib.CREATE_BOND
+ADJUDICATE_BOND = 2 * 10**16  # 0.02 GEN, must match datum_lib.ADJUDICATE_BOND
 
 
 def _precip_constitution(**overrides):
@@ -407,3 +408,286 @@ class TestClaimActuallyPaysOut:
         with direct_vm.prank(direct_bob):
             with pytest.raises(Exception, match=re.escape("nothing to claim")):
                 contract.claim(event_id=event_id)
+
+
+class TestCancelRefusedAfterAccept:
+    def test_cannot_cancel_once_active(self, contract, direct_vm, direct_alice, direct_bob):
+        with direct_vm.prank(direct_alice):
+            direct_vm.value = STAKE + CREATE_BOND
+            event_id = contract.create_event(
+                constitution_json=_precip_constitution(), side="YES", stake=str(STAKE)
+            )
+        with direct_vm.prank(direct_bob):
+            direct_vm.value = STAKE
+            contract.accept_event(event_id=event_id, side="NO")
+
+        with direct_vm.prank(direct_alice):
+            with pytest.raises(Exception, match=re.escape("not open")):
+                contract.cancel_event(event_id=event_id)
+
+
+class TestExpireEvent:
+    def test_expire_after_window_start_slashes_create_bond(
+        self, contract, direct_vm, direct_alice, direct_owner
+    ):
+        with direct_vm.prank(direct_alice):
+            direct_vm.value = STAKE + CREATE_BOND
+            event_id = contract.create_event(
+                constitution_json=_precip_constitution(), side="YES", stake=str(STAKE)
+            )
+
+        alice_before = json.loads(
+            contract.get_claimable(address=str(direct_alice), cursor=0, limit=1)
+        )
+        assert int(alice_before["claimable"]) == 0
+
+        # Window start is NOW_PLACEHOLDER + 3h (2027-01-15 11:00 UTC).
+        direct_vm.warp("2027-01-15T11:05:00Z")
+        contract.expire_event(event_id=event_id)
+
+        event = json.loads(contract.get_event(event_id=event_id))
+        assert event["state"] == "EXPIRED"
+        assert event["create_bond_slashed"] is True
+
+        alice_after = json.loads(
+            contract.get_claimable(address=str(direct_alice), cursor=0, limit=1)
+        )
+        # Stake refunded, but NOT the create bond -- that is the slash.
+        assert int(alice_after["claimable"]) == STAKE
+
+        treasury_after = json.loads(
+            contract.get_claimable(address=str(direct_owner), cursor=0, limit=1)
+        )
+        assert int(treasury_after["claimable"]) == CREATE_BOND
+
+    def test_expire_before_window_start_rejected(self, contract, direct_vm, direct_alice):
+        with direct_vm.prank(direct_alice):
+            direct_vm.value = STAKE + CREATE_BOND
+            event_id = contract.create_event(
+                constitution_json=_precip_constitution(), side="YES", stake=str(STAKE)
+            )
+        with pytest.raises(Exception, match=re.escape("window has not started yet")):
+            contract.expire_event(event_id=event_id)
+
+    def test_expire_after_accept_rejected(self, contract, direct_vm, direct_alice, direct_bob):
+        with direct_vm.prank(direct_alice):
+            direct_vm.value = STAKE + CREATE_BOND
+            event_id = contract.create_event(
+                constitution_json=_precip_constitution(), side="YES", stake=str(STAKE)
+            )
+        with direct_vm.prank(direct_bob):
+            direct_vm.value = STAKE
+            contract.accept_event(event_id=event_id, side="NO")
+
+        direct_vm.warp("2027-01-15T11:05:00Z")
+        with pytest.raises(Exception, match=re.escape("not open")):
+            contract.expire_event(event_id=event_id)
+
+
+def _clear_envelope_for(event_id):
+    return json.dumps(
+        {
+            "event_id": event_id,
+            "sources": {
+                "NWS_OBS": {
+                    "usable": True,
+                    "station_id": "USW00094728",
+                    "t": NOW_PLACEHOLDER + 3 * 3600 + 100,
+                    "value_native": 12,
+                    "unit": "mm",
+                    "product_status": "FINAL",
+                    "converted": 1200,
+                    "reason": None,
+                },
+                "GHCN_DAILY": {
+                    "usable": True,
+                    "station_id": "USW00094728",
+                    "t": NOW_PLACEHOLDER + 3 * 3600 + 200,
+                    "value_native": 13,
+                    "unit": "mm",
+                    "product_status": "FINAL",
+                    "converted": 1300,
+                    "reason": None,
+                },
+            },
+            "verdict": "YES",
+            "code": "CLEAR",
+        }
+    )
+
+
+def _create_accept_adjudicate_to_verdict_pending(
+    contract, direct_vm, direct_alice, direct_bob, appeal_window=300
+):
+    with direct_vm.prank(direct_alice):
+        direct_vm.value = STAKE + CREATE_BOND
+        event_id = contract.create_event(
+            constitution_json=_precip_constitution(appeal_window=appeal_window),
+            side="YES",
+            stake=str(STAKE),
+        )
+    with direct_vm.prank(direct_bob):
+        direct_vm.value = STAKE
+        contract.accept_event(event_id=event_id, side="NO")
+
+    direct_vm.mock_llm(r".*", _clear_envelope_for(event_id))
+    direct_vm.warp("2027-01-15T18:00:00Z")
+    with direct_vm.prank(direct_alice):
+        direct_vm.value = ADJUDICATE_BOND
+        contract.adjudicate(event_id=event_id)
+    return event_id
+
+
+class TestAppealRefusals:
+    def test_stranger_cannot_appeal(
+        self, contract, direct_vm, direct_alice, direct_bob, direct_charlie
+    ):
+        event_id = _create_accept_adjudicate_to_verdict_pending(
+            contract, direct_vm, direct_alice, direct_bob
+        )
+        bond = max(STAKE // 2, 5 * 10**16)
+        with direct_vm.prank(direct_charlie):
+            direct_vm.value = bond
+            with pytest.raises(Exception, match=re.escape("not a party")):
+                contract.appeal(event_id=event_id, ground="VALUE")
+
+    def test_appeal_after_window_closed_rejected(self, contract, direct_vm, direct_alice, direct_bob):
+        event_id = _create_accept_adjudicate_to_verdict_pending(
+            contract, direct_vm, direct_alice, direct_bob, appeal_window=300
+        )
+        bond = max(STAKE // 2, 5 * 10**16)
+        # 10 minutes later -- past the 5-minute appeal window.
+        direct_vm.warp("2027-01-15T18:10:00Z")
+        with direct_vm.prank(direct_bob):
+            direct_vm.value = bond
+            with pytest.raises(Exception, match=re.escape("appeal closed")):
+                contract.appeal(event_id=event_id, ground="VALUE")
+
+    def test_appeal_before_verdict_pending_rejected(self, contract, direct_vm, direct_alice):
+        with direct_vm.prank(direct_alice):
+            direct_vm.value = STAKE + CREATE_BOND
+            event_id = contract.create_event(
+                constitution_json=_precip_constitution(), side="YES", stake=str(STAKE)
+            )
+        bond = max(STAKE // 2, 5 * 10**16)
+        with direct_vm.prank(direct_alice):
+            direct_vm.value = bond
+            with pytest.raises(Exception, match=re.escape("not pending")):
+                contract.appeal(event_id=event_id, ground="VALUE")
+
+
+class TestReAdjudicateRefusals:
+    def test_re_adjudicate_on_non_appealed_state_rejected(
+        self, contract, direct_vm, direct_alice, direct_bob
+    ):
+        event_id = _create_accept_adjudicate_to_verdict_pending(
+            contract, direct_vm, direct_alice, direct_bob
+        )
+        # State is VERDICT_PENDING, not APPEALED -- no appeal was opened.
+        with direct_vm.prank(direct_bob):
+            direct_vm.value = ADJUDICATE_BOND
+            with pytest.raises(Exception, match=re.escape("not pending")):
+                contract.re_adjudicate(event_id=event_id)
+
+
+class TestLapseAppeal:
+    def test_lapse_appeal_before_stall_rejected(self, contract, direct_vm, direct_alice, direct_bob):
+        event_id = _create_accept_adjudicate_to_verdict_pending(
+            contract, direct_vm, direct_alice, direct_bob
+        )
+        bond = max(STAKE // 2, 5 * 10**16)
+        with direct_vm.prank(direct_bob):
+            direct_vm.value = bond
+            contract.appeal(event_id=event_id, ground="VALUE")
+
+        # Immediately after opening the appeal -- nowhere near the 1h stall.
+        with pytest.raises(Exception, match=re.escape("appeal has not stalled yet")):
+            contract.lapse_appeal(event_id=event_id)
+
+    def test_lapse_appeal_after_stall_restores_prior_verdict_and_forfeits_bond(
+        self, contract, direct_vm, direct_alice, direct_bob, direct_owner
+    ):
+        event_id = _create_accept_adjudicate_to_verdict_pending(
+            contract, direct_vm, direct_alice, direct_bob
+        )
+        bond = max(STAKE // 2, 5 * 10**16)
+        with direct_vm.prank(direct_bob):
+            direct_vm.value = bond
+            contract.appeal(event_id=event_id, ground="VALUE")
+
+        record_before = json.loads(contract.get_record(event_id=event_id))
+        assert record_before["state"] == "APPEALED"
+
+        # 1h + a bit later -- past LAPSE_APPEAL_STALL.
+        direct_vm.warp("2027-01-15T19:01:00Z")
+        contract.lapse_appeal(event_id=event_id)
+
+        event = json.loads(contract.get_event(event_id=event_id))
+        assert event["state"] == "VERDICT_PENDING"
+        assert event["verdict"] == "YES"
+        assert event["appeal"] is None
+
+        treasury_after = json.loads(
+            contract.get_claimable(address=str(direct_owner), cursor=0, limit=1)
+        )
+        assert int(treasury_after["claimable"]) == bond
+
+    def test_lapse_appeal_on_non_appealed_state_rejected(
+        self, contract, direct_vm, direct_alice, direct_bob
+    ):
+        event_id = _create_accept_adjudicate_to_verdict_pending(
+            contract, direct_vm, direct_alice, direct_bob
+        )
+        with pytest.raises(Exception, match=re.escape("not pending")):
+            contract.lapse_appeal(event_id=event_id)
+
+
+class TestReclaimBonds:
+    def test_reclaim_bonds_by_a_party_on_finalized_event_succeeds_as_noop(
+        self, contract, direct_vm, direct_alice, direct_bob
+    ):
+        event_id = _create_accept_adjudicate_to_verdict_pending(
+            contract, direct_vm, direct_alice, direct_bob
+        )
+        direct_vm.warp("2027-01-15T18:10:00Z")
+        contract.finalize(event_id=event_id)
+
+        event = json.loads(contract.get_event(event_id=event_id))
+        assert event["state"] == "FINALIZED"
+
+        # reclaim_bonds is documented as a no-op confirmation endpoint for
+        # a party to this event -- it must not raise, and must not move
+        # any GEN beyond what finalize() already credited.
+        with direct_vm.prank(direct_alice):
+            before = json.loads(
+                contract.get_claimable(address=str(direct_alice), cursor=0, limit=1)
+            )
+            contract.reclaim_bonds(event_id=event_id)
+            after = json.loads(
+                contract.get_claimable(address=str(direct_alice), cursor=0, limit=1)
+            )
+        assert before["claimable"] == after["claimable"]
+
+    def test_reclaim_bonds_by_stranger_rejected(
+        self, contract, direct_vm, direct_alice, direct_bob, direct_charlie
+    ):
+        event_id = _create_accept_adjudicate_to_verdict_pending(
+            contract, direct_vm, direct_alice, direct_bob
+        )
+        direct_vm.warp("2027-01-15T18:10:00Z")
+        contract.finalize(event_id=event_id)
+
+        with direct_vm.prank(direct_charlie):
+            with pytest.raises(Exception, match=re.escape("nothing to claim")):
+                contract.reclaim_bonds(event_id=event_id)
+
+    def test_reclaim_bonds_on_non_terminal_state_rejected(
+        self, contract, direct_vm, direct_alice, direct_bob
+    ):
+        event_id = _create_accept_adjudicate_to_verdict_pending(
+            contract, direct_vm, direct_alice, direct_bob
+        )
+        # Still VERDICT_PENDING -- not FINALIZED/CANCELED/EXPIRED yet.
+        with direct_vm.prank(direct_alice):
+            with pytest.raises(Exception, match=re.escape("not pending")):
+                contract.reclaim_bonds(event_id=event_id)

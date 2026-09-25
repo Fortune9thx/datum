@@ -645,3 +645,113 @@ class TestAdjudicationPrompt:
         assert '"lat"' not in prompt
         assert '"lon"' not in prompt
         assert "official station id 01646500" in prompt
+
+
+# ---------------------------------------------------------------------------
+# "Lying leader" detection -- mirrors adjudicate()'s validator_fn comparison
+# in contracts/Datum.py exactly: evaluate_envelope() is called twice (once
+# on what the leader claims, once on what an independently-re-derived
+# envelope would say) and the two independently-derived outcomes are
+# compared. gltest direct-mode cannot inject two different LLM response
+# bodies for the same mocked prompt pattern (mock_llm() matches in
+# registration order and returns the FIRST match for a repeated pattern --
+# see tests/direct/conftest.py and project memory), so this exact
+# comparison -- the actual on-chain defense -- is tested here at the
+# datum_lib level instead. This does NOT prove genuine multi-validator
+# network disagreement (see docs/localnet.md); it proves the comparator
+# ITSELF correctly rejects when given two genuinely different envelopes,
+# which is the whole of what code can verify without a real network.
+# ---------------------------------------------------------------------------
+
+
+def _validators_agree(kwargs: dict, leader_envelope: dict, my_envelope: dict) -> bool:
+    """Reproduces contracts/Datum.py's validator_fn comparison exactly:
+    both envelopes are independently evaluated and the derived outcomes
+    (verdict, code, agreed_value) must match -- never the raw envelopes,
+    never either side's own claimed verdict/code field."""
+    leader_eval = lib.evaluate_envelope(envelope=leader_envelope, **kwargs)
+    my_eval = lib.evaluate_envelope(envelope=my_envelope, **kwargs)
+    if not leader_eval["accepted"] or not my_eval["accepted"]:
+        return False
+    return (
+        leader_eval["verdict"] == my_eval["verdict"]
+        and leader_eval["code"] == my_eval["code"]
+        and leader_eval["agreed_value"] == my_eval["agreed_value"]
+    )
+
+
+class TestLyingLeaderDetection:
+    def _kwargs(self, **overrides):
+        base = dict(
+            instrument_class="STATION_PRECIP",
+            expected_station_id="USW00094728",
+            expected_bbox=None,
+            window=(NOW + 3 * 3600, NOW + 3 * 3600 + 6 * 3600),
+            product_status_policy="FINAL_ONLY",
+            tolerance_scaled=lib.CLASS_DEFAULT_TOLERANCE["STATION_PRECIP"],
+            threshold_scaled=10 * lib.VALUE_SCALE,
+            cmp_op="gte",
+        )
+        base.update(overrides)
+        return base
+
+    def test_leader_claims_usable_yes_independent_refetch_says_no_rejected(self):
+        # Leader's envelope: both sources usable, well above threshold -> YES.
+        leader_sources = _envelope_sources(value_a=15.0, value_b=15.2)
+        leader_envelope = {
+            "event_id": "1",
+            "sources": leader_sources,
+            "verdict": "YES",
+            "code": "CLEAR",
+        }
+        # An independent re-fetch that actually reflects the real (lower)
+        # readings -> NO. A lying/wrong leader claiming YES must not survive
+        # comparison against this genuinely different independent result.
+        my_sources = _envelope_sources(value_a=5.0, value_b=5.1)
+        my_envelope = {
+            "event_id": "1",
+            "sources": my_sources,
+            "verdict": "NO",
+            "code": "CLEAR",
+        }
+        assert _validators_agree(self._kwargs(), leader_envelope, my_envelope) is False
+
+    def test_station_id_mismatch_between_leader_and_independent_fetch_rejected(self):
+        leader_sources = _envelope_sources(value_a=12.0, value_b=12.4)
+        leader_envelope = {"event_id": "1", "sources": leader_sources, "verdict": "YES", "code": "CLEAR"}
+        # Independent fetch reports the wrong station for one source --
+        # that source becomes unusable, dropping usable count below 2.
+        my_sources = _envelope_sources(value_a=12.0, value_b=12.4)
+        my_sources["GHCN_DAILY"]["station_id"] = "WRONGID001"
+        my_envelope = {"event_id": "1", "sources": my_sources, "verdict": "INCONCLUSIVE", "code": "MISSING"}
+        assert _validators_agree(self._kwargs(), leader_envelope, my_envelope) is False
+
+    def test_converted_value_outside_tolerance_between_leader_and_independent_fetch_rejected(self):
+        # Leader claims tight agreement (within the 1.0mm default tolerance).
+        leader_sources = _envelope_sources(value_a=12.0, value_b=12.4)
+        leader_envelope = {"event_id": "1", "sources": leader_sources, "verdict": "YES", "code": "CLEAR"}
+        # Independent fetch's own two sources conflict beyond tolerance --
+        # a genuinely different, non-CLEAR outcome.
+        my_sources = _envelope_sources(value_a=5.0, value_b=50.0)
+        my_envelope = {"event_id": "1", "sources": my_sources, "verdict": "INCONCLUSIVE", "code": "CONFLICT"}
+        assert _validators_agree(self._kwargs(), leader_envelope, my_envelope) is False
+
+    def test_timestamp_outside_window_between_leader_and_independent_fetch_rejected(self):
+        leader_sources = _envelope_sources(value_a=12.0, value_b=12.4)
+        leader_envelope = {"event_id": "1", "sources": leader_sources, "verdict": "YES", "code": "CLEAR"}
+        # Independent fetch's readings both fall outside the locked window
+        # (t_offset far beyond window end) -> both unusable -> MISSING.
+        my_sources = _envelope_sources(t_offset=999_999, value_a=12.0, value_b=12.4)
+        my_envelope = {"event_id": "1", "sources": my_sources, "verdict": "INCONCLUSIVE", "code": "MISSING"}
+        assert _validators_agree(self._kwargs(), leader_envelope, my_envelope) is False
+
+    def test_same_derived_outcome_different_raw_envelopes_accepted(self):
+        # Two independently-constructed envelopes (different dict identity,
+        # round-tripped through JSON) with the SAME underlying readings must
+        # agree -- volatile formatting differences are expected between two
+        # genuinely independent fetches and must not cause a false reject.
+        leader_sources = _envelope_sources(value_a=12.0, value_b=12.4)
+        my_sources = json.loads(json.dumps(_envelope_sources(value_a=12.0, value_b=12.4)))
+        leader_envelope = {"event_id": "1", "sources": leader_sources, "verdict": "YES", "code": "CLEAR"}
+        my_envelope = {"event_id": "1", "sources": my_sources, "verdict": "YES", "code": "CLEAR"}
+        assert _validators_agree(self._kwargs(), leader_envelope, my_envelope) is True

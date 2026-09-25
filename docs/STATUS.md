@@ -113,17 +113,47 @@ either failure was. The GenVM size ceiling remains ~52,224 bytes, and
 DATUM's bundle (40,784 bytes) is well inside it, independently confirmed
 by `genvm-lint lint` and the bundler's own size check below.
 
-### What to try next (not yet attempted this session)
+### 2026-09-25 (later, same day): one more A/B pass, per explicit
+    instruction ("hosted A/B once"), before declaring hosted dead
+
+Studio UI was not used -- still a non-interactive session, no
+browser/wallet-extension access, so no way to sign through the UI. CLI
+used again as the only available client. Both attempts, one each:
+
+```
+$ genlayer deploy --contract artifacts/smoke/Hello.py --args [] --fee-value 100000000000010352
+Error: Transaction reverted: EVM tx 0x37c6b540...3fbb898. FeeValueMustBeNonZero(1)
+
+$ genlayer deploy --contract artifacts/Datum.bundled.py --args '["0xC6E6...4537"]' --fee-value 100000000000010352
+Error: Transaction reverted: EVM tx 0xc71d4ab9...9719f614. FeeValueMustBeNonZero(1)
+```
+
+Both hashes confirmed `{"detail":"Transaction not found"}` on the
+explorer -- neither ever reached the chain. Deployer balance unchanged
+(58.102276059299813895 GEN before and after). Timestamp: 2026-09-25T10:46-10:47Z.
+
+**A failed and B failed. Per this project's own rule: stop spending GEN.**
+The CLI-specific client-side bug from the earlier writeup is confirmed
+still open, not something that cleared between sessions. The real local
+execution recipe is in `docs/STEWARD.md`'s "Local recipe" section --
+91 tests (64 unit + 27 gltest direct-mode) passing, covering the happy
+path AND the refusal path for every one of the 12 write methods, plus 5
+dedicated comparator tests proving a leader that disagrees with an
+independent re-fetch is rejected (see `docs/audit.md`'s "Witness
+mismatch" section for what that does and does not prove about real
+network-level validator disagreement).
+
+### What to try next (still not attempted -- needs interactive access this session does not have)
 
 1. **Studio UI** (https://studio-dev.genlayer.com) -- browser + wallet
-   deploy, not exercised in this non-interactive session. Given the CLI's
-   failure is now confirmed client-side and CLI-specific, the UI (a
-   different client) may well work where the CLI does not.
+   deploy. Given the CLI's failure is confirmed client-side and
+   CLI-specific, the UI (a different client) may well work where the CLI
+   does not.
 2. **Raw `genlayer-js` SDK script**, bypassing the CLI's `deploy` command
    entirely (the pattern `scripts/deploy.mjs` already uses, matching
    `precedence-settler`'s proven-working approach on this same network) --
-   worth trying with a real keystore password, since the CLI wrapper
-   itself, not the underlying SDK/network, is the suspect.
+   needs a real keystore password, which this session does not have and
+   will not ask for or guess.
 3. If either works, please file the CLI bug upstream
    (`genlayerlabs/genlayer` or wherever `npm genlayer` is tracked) with
    the repro above -- a deploy that never reaches the chain but reports a
@@ -132,7 +162,207 @@ by `genvm-lint lint` and the bundler's own size check below.
 
 ## Local toolchain: what actually happened (real captured output)
 
+> **Editorial note (2026-09-25):** an earlier revision of this document
+> was accidentally truncated mid-rewrite (a `Write` tool call that lost
+> everything from this heading onward, unnoticed until a later steward-
+> requested strict pass caught the file was 262 lines in git history and
+> 138 in the working tree). Restored and updated below with current
+> figures. Flagging this plainly rather than quietly fixing it: it is
+> exactly the kind of silent-content-loss mistake a rigorous review
+> should be able to catch independently, and a reader deserves to know it
+> happened rather than assume this document was always complete.
+
 This machine has a long-documented, cross-project history of
 `genvm-lint`'s runtime-dependent commands and `gltest`'s direct-mode
 deploy failing with `name 'gl' is not defined`, assumed to be a
 persistent local gap. **On this project, that assumption turned out to
+be wrong.** It was three real, stacked, fixable bugs producing the same
+generic symptom every time -- see CHANGELOG.md's 1.1.2 entry for the full
+technical writeup. Below is the current, real, all-green evidence.
+
+### 1. `genvm-lint lint` -- PASSES
+
+Pure AST-based static safety checks, no runtime/runner needed.
+
+```
+$ PYTHONIOENCODING=utf-8 genvm-lint lint contracts/Datum.py
+Lint passed (3 checks)
+
+$ PYTHONIOENCODING=utf-8 genvm-lint lint artifacts/Datum.bundled.py
+Lint passed (3 checks)
+```
+
+### 2. `genvm-lint check` / `validate` / `schema` -- PASS
+
+```
+$ PYTHONIOENCODING=utf-8 genvm-lint check artifacts/Datum.bundled.py
+Lint passed (3 checks)
+Validation passed
+  Contract: Datum
+  Methods: 22 (10 view, 12 write)
+```
+
+### 3. `gltest` direct-mode deploy -- PASSES, real execution proof
+
+```
+$ python -m pytest tests/direct/test_datum_contract.py -q
+...........................                                              [100%]
+27 passed in 21.13s
+```
+
+This deploys `artifacts/Datum.bundled.py` into a real GenVM sandbox
+(rebuilding the bundle itself first, since gltest clears its own
+`artifacts/` cache directory -- a same-name coincidence with the
+bundler's output dir, unrelated to the fix above) and exercises, with
+both a happy path AND a refusal test for every one of the 12 write
+methods: `create_event` (real GEN attached via `direct_vm.value`) +
+constitution-hash freeze + three create-time refusals (below-min-window,
+single-publisher, below-min-lead); `accept_event` from a second account
+(`direct_vm.prank(direct_bob)`) + a stranger unable to double-accept;
+`adjudicate` refusing before window close, and succeeding with a mocked
+LLM response through to a stored verdict; `cancel_event` restricted to
+the creator, and refused once ACTIVE; `expire_event` slashing the create
+bond once the window opens unaccepted, refused before the window starts
+and after acceptance; `appeal` refusing a non-party and a post-window
+attempt; `re_adjudicate` refusing on a non-APPEALED state, and correctly
+resolving the appeal bond (refund if the verdict changed, forfeit if it
+didn't) once it succeeds; `lapse_appeal` refusing before the 1h stall and
+correctly restoring the prior verdict + forfeiting the bond after it;
+`reclaim_bonds` succeeding as a documented no-op for a bonded party on a
+terminal event, refusing a stranger and a non-terminal state; and `claim`
+actually paying out and zeroing the ledger, refusing an address with
+nothing owed. This is a genuine execution proof against real GenVM
+storage/event/contract-class wiring, not a mock of the contract's own
+logic -- `contracts/datum_lib.py`'s unit tests (below) already cover the
+pure logic in isolation; this proves the `gl.contract.Contract` glue
+around it actually works on this pinned runner, for every write method,
+not just a subset.
+
+**What this does not prove**, stated plainly rather than implied: no
+genuine multi-validator disagreement (`gltest` direct-mode has one
+in-process leader; it cannot simulate two real GenVM nodes actually
+disagreeing at the network level), and no real GEN balance movement (the
+`claimable` ledger and `direct_vm.value` are both proven at the
+accounting level, not as an actual on-chain value transfer, since there
+is no live contract to check a real balance delta against). See
+`docs/audit.md`'s "Witness mismatch" section and `docs/localnet.md`.
+
+`genlayer up` (the full Docker-based localnet simulator, a different
+path than `gltest` direct-mode, and the one path that WOULD exercise real
+multi-validator consensus) was not attempted -- this machine has no
+Docker installed. `gltest` direct-mode is a real, if narrower, substitute
+that does not need it. See `docs/localnet.md`.
+
+### 4. Primary verified coverage -- `contracts/datum_lib.py` unit tests
+
+`datum_lib.py` has zero genlayer imports, so it needs no runner and no
+network access at all. This includes the adjudication prompt builder
+(`_adjudication_prompt`) and, as of this session, five dedicated "lying
+leader" tests that reproduce `adjudicate()`'s validator comparison logic
+exactly (two independently-evaluated envelopes compared field-by-field,
+never either side's own claimed verdict trusted) and prove a leader
+whose independent re-fetch would disagree -- on usable/unusable status,
+station id, tolerance, or window -- is rejected, while two genuinely
+independent but formatting-different envelopes with the same underlying
+readings still agree:
+
+```
+$ python -m pytest tests/direct/test_datum_lib.py -q
+................................................................         [100%]
+64 passed in 0.26s
+```
+
+This is DATUM's actual, currently-trustworthy test evidence: every create
+refusal, the constitution hash freeze, unit conversion, volatile-key
+neutralization, the full envelope acceptance/rejection logic (agree ->
+YES/NO, missing -> INCONCLUSIVE, conflict -> INCONCLUSIVE, preliminary
+blocked, station mismatch, quake-outside-bbox), the economics math (fee
+split, appeal bond floor, payout dust), the adjudication prompt's
+depth/lat-lon fields for QUAKES, and the lying-leader comparator
+rejections, are all exercised directly.
+
+### 5. Bundle size check -- PASSES
+
+```
+$ python scripts/build_bundle.py
+Wrote artifacts/Datum.bundled.py (41489 bytes)
+OK: bundle is under the 52224-byte ceiling (10735 bytes to spare)
+```
+
+## Frontend
+
+Live at https://datum-gamma.vercel.app. Verified in-browser (desktop and
+375px mobile, zero console errors): the marketing long-scroll at `/`, and
+`/app`, `/app/create`, `/app/stations`, `/app/portfolio`, `/app/activity`,
+`/app/docs`, `/app/e/:id` all render, all fail closed with an honest,
+state-specific banner (no address / no code / RPC down / live), and
+`/board` + `/e/:id` redirect to their `/app` equivalents including on a
+direct URL load (no 404 on refresh).
+
+All twelve writes (`create_event`, `accept_event`, `adjudicate`,
+`finalize`, `appeal`, `re_adjudicate`, `lapse_appeal`, `cancel_event`,
+`expire_event`, `claim`, `recover_refund`, `reclaim_bonds`) now have a UI
+entry point on the ticket page, wired through `genlayer-js` against an
+injected wallet, state/identity-gated as a client-side convenience
+(the contract's own checks remain authoritative regardless), correctly
+disabled with a specific reason string (no address / no code / RPC down /
+no wallet / wrong chain) whenever any of those is true. Two real
+value-attachment bugs (hardcoded `0n` instead of the required stake/bond
+amounts on two buttons, a missing `value` parameter on the `re_adjudicate`
+SDK wrapper) were found and fixed this session by checking every wired
+call site against its contract-side requirement -- see CHANGELOG.md's
+1.1.5/1.1.6 entries. All twelve writes remain **unexercised end-to-end
+against a live network** -- there is no live contract yet to write to,
+and no click-through UI test has been run, only a clean `next build`
+(type-checks the call sites) and a live fail-closed render check.
+
+## What the user should run themselves once the CLI deploy bug clears
+
+`Datum.__init__` takes a required `treasury: str` address argument (added
+this session -- the contract previously had no withdrawal path for
+accumulated fees/forfeited bonds at all, see CHANGELOG.md's 1.1.3 entry).
+Pass your own deployer address unless a separate treasury account exists:
+
+```bash
+cd C:\Users\HP\Desktop\datum
+genlayer deploy --contract artifacts/Datum.bundled.py --args '["0xYOUR_DEPLOYER_ADDRESS"]'
+```
+
+If that still reverts with `FeeValueMustBeNonZero` and the transaction
+hash is not found on the explorer, the CLI-specific bug documented above
+has not yet been fixed upstream -- retry later, or try the Studio UI /a
+raw SDK script (see "What to try next" above) rather than experimenting
+further with fee parameters, since seven different configurations across
+two sessions all failed identically.
+
+Once a deploy succeeds:
+
+```bash
+cd C:\Users\HP\Desktop\datum\frontend
+vercel env add NEXT_PUBLIC_DATUM_CONTRACT_ADDRESS production
+vercel env add NEXT_PUBLIC_DATUM_CONTRACT_ADDRESS preview
+vercel --prod --yes
+```
+
+Then confirm `eth_getCode` is non-empty and the live banner on
+https://datum-gamma.vercel.app shows the address, and do one real smoke
+transaction with real GEN at the smallest legal amounts: `create_event`,
+then `accept_event` from a second account, then stop -- do not adjudicate
+before the window closes. Document the result here, success or
+UserError either way, before attempting anything further.
+
+## Open questions / missing prerequisites found (not blocking)
+
+- No `gh` CLI or Vercel CLI auth issues -- both worked directly.
+- The `bradbury-deploy` keystore's raw password was never read or
+  printed; the `genlayer` CLI's own unlocked session was used for every
+  deploy attempt instead, so no secret left the CLI's own key management.
+- Studio Dev UI (browser + MetaMask) was not exercised in any session so
+  far -- no interactive browser/wallet access in this environment. If the
+  user tries the UI path and it also fails, that would mean the issue is
+  platform-wide rather than CLI-specific, contradicting the explorer
+  evidence above -- worth documenting either way.
+- A raw `genlayer-js` SDK script bypassing the CLI's `deploy` command
+  (the approach `scripts/deploy.mjs` already implements) was also not
+  attempted -- it needs a real keystore password, which no session so far
+  has had or asked for.

@@ -103,6 +103,42 @@ future version of the original author).
 4. Re-run `python scripts/build_bundle.py` after any contract edit --
    never hand-edit `artifacts/Datum.bundled.py`.
 
+## Local recipe (Studio Dev deploy still blocked -- run this instead)
+
+Hosted deploy has failed identically on every attempt across three
+sessions (see `docs/STATUS.md` for the full A/B evidence trail) -- the
+network is healthy, this is a client-side `genlayer` CLI bug specific to
+v0.40.0-rc.3 (the only released version supporting Studio Next at all).
+Until that clears, this is the real, passing local substitute -- not a
+placeholder, an actual execution proof:
+
+```bash
+cd C:\Users\HP\Desktop\datum
+
+# Rebuild the bundle (gltest clears its own artifacts/ dir at session
+# start, so this must run fresh before every test invocation):
+python scripts/build_bundle.py
+
+# Pure-logic unit tests -- zero genlayer imports, zero toolchain
+# dependency, 64 passing (includes 5 "lying leader" comparator-rejection
+# tests):
+python -m pytest tests/direct/test_datum_lib.py -q
+
+# Real GenVM sandbox execution -- deploy + create/accept/cancel/expire/
+# adjudicate/appeal/re_adjudicate/lapse_appeal/reclaim_bonds/claim, 27
+# passing, happy path AND refusal covered for every one of the 12 write
+# methods:
+python -m pytest tests/direct/test_datum_contract.py -q
+
+# Full runtime validation on the bundle (not just static lint):
+PYTHONIOENCODING=utf-8 genvm-lint check artifacts/Datum.bundled.py
+```
+
+For a fuller local network (real multi-validator Docker simulator,
+`genlayer up`) instead of `gltest` direct-mode's single-process sandbox,
+see `docs/localnet.md`'s "Path B" -- not attempted on this machine (no
+Docker installed), documented there for whoever has it.
+
 ## Design decisions a future steward should NOT casually change
 
 - The 1:1 symmetric-wager model -- switching to a pooled multi-party

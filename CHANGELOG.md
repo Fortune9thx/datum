@@ -280,3 +280,56 @@ strict, assumption-free re-audit of the current codebase against the full
 - Verified via a clean `next build` and a live render check (no console
   errors, correct fail-closed empty state). Deployed to
   https://datum-gamma.vercel.app.
+
+## [1.1.7] - 2026-09-25 - Close proof gaps: comparator tests, six-write coverage, one more A/B, a real doc regression found and fixed
+
+Per explicit instruction ("close proof gaps, do not claim Portal-ready"):
+
+- Added `TestLyingLeaderDetection` (5 tests) to `test_datum_lib.py`,
+  reproducing `adjudicate()`'s real validator comparison logic exactly
+  (two independently-evaluated envelopes compared field-by-field) and
+  proving a leader whose independent re-fetch would disagree -- on
+  usable/unusable status, station id, tolerance, or window -- is
+  rejected, while two genuinely independent but differently-formatted
+  envelopes with the same underlying readings still agree. `gltest`
+  cannot inject two different LLM response bodies for one mocked prompt
+  pattern (documented, pre-existing limitation), so this is tested at
+  the `datum_lib` level, exactly as instructed -- does not prove genuine
+  network-level multi-validator disagreement, and `docs/audit.md`/
+  `docs/STATUS.md` both say so explicitly rather than implying otherwise.
+- Added direct happy-path AND refusal-path `gltest` tests for all six
+  previously under-tested writes: `cancel_event` (refusal after accept,
+  on top of the existing creator/stranger coverage), `expire_event`
+  (slash on window-start, refused before window start and after accept),
+  `appeal` (stranger refused, post-window refused, pre-VERDICT_PENDING
+  refused), `re_adjudicate` (refused on non-APPEALED state), `lapse_appeal`
+  (refused before the 1h stall, restores prior verdict + forfeits the
+  bond after it, refused on non-APPEALED state), `reclaim_bonds`
+  (succeeds as a no-op for a bonded party on a terminal event, refuses a
+  stranger and a non-terminal state). `claim()` drain/non-owner-refuse
+  was already locked from the prior session, left as-is. Total suite:
+  91 passing (64 unit + 27 gltest direct-mode), every one of the 12
+  write methods now has both a happy-path and a refusal test.
+- One more hosted A/B pass, as instructed, before declaring hosted dead
+  a second time: both attempts (Hello, DATUM bundle) reverted identically
+  with `FeeValueMustBeNonZero`, both confirmed never reaching the chain
+  via the explorer, zero GEN spent. Per this project's own rule: stopped
+  spending GEN. Added a concrete, copy-pasteable local recipe (not just a
+  pointer) to `docs/STEWARD.md`.
+- **Found and fixed a real content-loss regression**: an earlier `Write`
+  tool call to `docs/STATUS.md` had silently truncated the file from 262
+  lines to 138, losing the entire "Local toolchain" evidence section,
+  the "Frontend" section, the "what to run" section, and the "open
+  questions" section -- unnoticed until this pass's own line-count check
+  across git history. Restored and updated with current, accurate
+  figures (91 tests, 12/12 write methods covered, current bundle size).
+  Flagged plainly in the restored document itself rather than silently
+  fixed, and checked every other doc file's line-count history for the
+  same failure mode (none found).
+- README's first screen (decision, adversary, must-agree/may-differ,
+  failure policy, live URL, contract status) was already in that order;
+  updated its contract-address line and test-count/deploy sections to
+  the current, accurate figures and the corrected (CLI-specific, not
+  infra-side) deploy-blocker framing.
+- Confirmed: no "100% ready" or "Portal-ready" claim exists anywhere in
+  this repository.

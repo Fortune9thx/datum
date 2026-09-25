@@ -4,7 +4,7 @@ DATUM settles one question on-chain: did a named instrument at a named official 
 
 **Live app:** https://datum-gamma.vercel.app (marketing site + board/create/stations/portfolio/activity/docs -- fails closed everywhere below, since nothing is deployed yet).
 
-**Contract address:** not deployed -- see [docs/STATUS.md](docs/STATUS.md) for two real, documented Studio Dev deploy attempts (both blocked by an infra-side FeeManager revert, unrelated to this repo's code) and [docs/localnet.md](docs/localnet.md) for a real, passing local execution proof instead.
+**Contract address:** not deployed. Seven documented Studio Dev deploy attempts across two sessions all failed identically and client-side (confirmed via the network's own explorer -- other accounts deploy successfully on this network right now; DATUM's own "reverted" transactions never reached the chain at all). Full evidence trail in [docs/STATUS.md](docs/STATUS.md); a real, passing local execution proof (91 tests: 64 pure-logic + 27 against a live GenVM sandbox, covering every write method's happy and refusal paths) is in [docs/localnet.md](docs/localnet.md) and [docs/STEWARD.md](docs/STEWARD.md).
 
 > "Official station observation at locked publishers for this window."
 
@@ -74,30 +74,38 @@ Full typed signatures in `contracts/Datum.py`.
 ## How to test
 
 ```bash
-# Primary, verified coverage -- zero genlayer imports, plain pytest:
+# Primary, verified coverage -- zero genlayer imports, plain pytest.
+# Includes 5 dedicated "lying leader" tests: reproduces adjudicate()'s
+# real validator comparison and proves a leader whose independent
+# re-fetch would disagree (on usability, station id, tolerance, or
+# window) is rejected -- see docs/audit.md's "Witness mismatch" section.
 python -m pytest tests/direct/test_datum_lib.py -q
-# 59 passed
+# 64 passed
 
 # Rebuild the deployable bundle + size check:
 python scripts/build_bundle.py
-# 40758 bytes, well under the 52224-byte Studio ceiling
+# 41489 bytes, well under the 52224-byte Studio ceiling
 
 # AST-based safety lint + full runtime validation, both on the bundle:
 PYTHONIOENCODING=utf-8 genvm-lint check artifacts/Datum.bundled.py
 # Lint passed (3 checks); Validation passed; 22 methods (10 view, 12 write)
 
-# gltest direct-mode: real deploy + create/accept/cancel/adjudicate-guard
-# flow against a live GenVM sandbox (see docs/localnet.md for what this
-# does and doesn't prove):
+# gltest direct-mode: real deploy + happy path AND refusal path for
+# EVERY one of the 12 write methods, against a live GenVM sandbox (see
+# docs/localnet.md for exactly what this does and does not prove):
 python -m pytest tests/direct/test_datum_contract.py -q
-# 9 passed
+# 27 passed
 ```
 
 ## How to deploy
 
-Not currently possible on Studio Dev -- two real, documented attempts (a
-trivial Hello contract and the full DATUM bundle, both via `genlayer
-deploy`) reverted identically with `FeeValueMustBeNonZero`, an infra-side
+Not currently possible on Studio Dev -- seven real, documented attempts
+across two sessions (a trivial Hello contract and the full DATUM bundle,
+repeatedly, via `genlayer deploy`) all reverted identically with
+`FeeValueMustBeNonZero`. As of 2026-09-25 this is confirmed client-side
+and specific to the `genlayer` CLI (the only released version supporting
+this network) -- the network itself is healthy; DATUM's own "reverted"
+transactions never reached the chain at all. Not an infra-side
 FeeManager issue, not a contract or repo problem. Full proof, exact
 commands, and what to try once it clears: [docs/STATUS.md](docs/STATUS.md).
 A real local execution proof exists in the meantime:
