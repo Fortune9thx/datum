@@ -113,3 +113,66 @@ All notable changes to this project are documented in this file.
   12 write). Full detail in `docs/STATUS.md`; the underlying toolchain finding is recorded in
   project memory (`genlayer-consensus-v06-migration-findings`,
   `genlayer-treemap-explicit-init-safe`) for reuse on future GenLayer projects on this machine.
+
+## [1.1.3] - 2026-09-25 - Four real fund-stranding bugs, found by a real lifecycle test
+
+A background audit against this account's accumulated GenLayer steward-
+rejection checklist flagged two suspicious areas; writing a real gltest
+direct-mode test of the full appeal lifecycle (not just unit tests of the
+pure math) to check them surfaced two more. All four are genuine bugs
+that would have stranded real GEN on the normal, expected-to-work path,
+not an edge case:
+
+- **Treasury had no withdrawal path.** `treasury_balance: u256` accumulated
+  fee shares and slashed/forfeited bonds in three separate places with no
+  method to ever drain it -- `reclaim_bonds` (the only plausibly-named
+  candidate) is a documented no-op. Replaced the counter with a
+  constructor-immutable `treasury: str` address; `Datum.__init__` now
+  takes `treasury: str` as a required arg. Every fee/forfeiture routes
+  through the same `_credit()`/`claim()` ledger every other party already
+  uses. `scripts/deploy.mjs` updated to pass the deployer's own address as
+  treasury (this project's documented convention when no separate
+  treasury account exists).
+- **A successful appeal's bond was never resolved on the normal path.**
+  `_settle()` never read or cleared `rec["appeal"]` -- only the 7-day
+  `recover_refund` timeout fallback did. On the expected case (appeal ->
+  re_adjudicate -> finalize, no further appeal), the appellant's bond was
+  neither refunded nor forfeited; it sat in the contract's raw balance
+  with no ledger entry, unrecoverable once FINALIZED. Fixed: `_settle()`
+  now refunds the appellant if the final verdict differs from what was
+  appealed, or forfeits to treasury if it doesn't (matching
+  `lapse_appeal`'s existing rule for a stalled appeal).
+- **`CREATE_BOND` was never returned on a normal settle.** Refunded by
+  `cancel_event`, slashed by `expire_event`, but `_settle()` -- the path
+  every accepted-and-resolved event actually takes -- never touched it.
+  Every successfully-settled event permanently stranded the creator's
+  0.05 GEN bond. Fixed: `_settle()` now refunds it unless already slashed.
+- **`re_adjudicate()` silently discarded the original adjudicator's
+  bond** when resetting `adjudicate_bond_payer`/`adjudicate_bond` to
+  `None` before the next `adjudicate()` call overwrites them. Fixed: the
+  outgoing adjudicator is credited their bond back first.
+
+Also removed genuinely dead code found in passing: the `positions`
+storage field and its `_load_position`/`_save_position`/`_position_key`
+helpers were declared and defined but never called from any write method
+(`get_position`/`get_positions` read straight from the event record).
+
+All four fixes are covered by two new real `gltest` direct-mode tests
+(`TestAppealBondResolution`) that deploy, run a full create -> accept ->
+adjudicate -> appeal -> re_adjudicate -> finalize lifecycle with a mocked
+LLM response, and assert the exact resulting `claimable` balances --
+11/11 direct-mode tests pass, 59/59 pure-logic unit tests pass, bundle
+40784 bytes (well under the 52224-byte ceiling), `genvm-lint check`
+passes clean.
+
+Two test-harness gotchas hit and worked around while writing these tests,
+documented in `tests/direct/conftest.py` and project memory rather than
+silently patched away: gltest's `mock_llm()` auto-`json.loads()`s any
+JSON-shaped response for `exec_prompt(response_format="json")` semantics,
+which breaks a contract (like this one) calling plain `exec_prompt(prompt)`
+and parsing the text itself -- worked around with a `conftest.py` patch
+that keeps the literal string. Separately, `mock_llm()` matches in
+registration order and returns the FIRST match for a repeated pattern,
+not the most recent -- `direct_vm.clear_mocks()` before re-registering
+for a second scenario is required (a previously-documented gotcha on this
+machine, re-confirmed here).

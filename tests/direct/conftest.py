@@ -48,3 +48,39 @@ def _tolerant_unlink(path, *args, **kwargs):
 
 
 os.unlink = _tolerant_unlink
+
+
+# ---------------------------------------------------------------------------
+# gltest's own LLM mock always tries to json.loads() a mock_llm() response
+# and, if it parses, returns the DECODED DICT instead of the literal string
+# (gltest/direct/wasi_mock.py's _handle_llm_request: "Auto-parse JSON
+# strings so exec_prompt(response_format='json') gets a dict"). That is the
+# right default for a contract using exec_prompt(response_format="json"),
+# but contracts/Datum.py's adjudicate() calls plain gl.nondet.exec_prompt(
+# prompt) with no response_format and does its own json.loads() on the
+# returned TEXT -- the real SDK's text-result decoder
+# (genlayer.nondet._decode_nondet_text) rejects a non-string nondet result
+# outright ("text result is not a string"), so a JSON-shaped mock_llm()
+# response never reaches the contract at all as things stand.
+#
+# This is a test-harness gap, not a contract bug (matches this project's
+# real create/accept/adjudicate flow, and the same mock quirk this
+# codebase has documented before under a different SDK generation). Patch
+# _handle_llm_request to keep the literal string DATUM's own adjudicate()
+# actually expects, instead of auto-decoding it.
+# ---------------------------------------------------------------------------
+
+from gltest.direct import wasi_mock as _wasi_mock
+
+_original_handle_llm_request = _wasi_mock._handle_llm_request
+
+
+def _patched_handle_llm_request(vm, data):
+    prompt = data.get("prompt", "")
+    response = vm._match_llm_mock(prompt)
+    if response is not None:
+        return {"ok": response}
+    return _original_handle_llm_request(vm, data)
+
+
+_wasi_mock._handle_llm_request = _patched_handle_llm_request

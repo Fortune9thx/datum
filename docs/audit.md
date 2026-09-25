@@ -9,7 +9,9 @@ imperfect or unverified, stated plainly rather than hidden).
 **Risk:** an event gets stuck in a non-terminal state (ACTIVE,
 VERDICT_PENDING, APPEALED) forever -- an adjudicator never shows up, an
 appeal never resolves -- and both parties' stakes are permanently
-unreachable.
+unreachable. A second, distinct version of this risk: an amount is
+credited nowhere at all on the *normal, successful* path, rather than
+being stuck in an unresolved event.
 
 **Mitigation:** `recover_refund(event_id)` is a deterministic,
 evidence-free fallback. Any event that has not reached a terminal state
@@ -21,6 +23,52 @@ GEN out of the contract, and it only ever pays the caller's own ledger
 balance (`self.claimable[gl.message.sender_address]`), never an address
 argument -- so a claim can't be redirected, and funds credited to an
 address are always eventually claimable by that same address.
+
+**Confirmed and fixed this session -- four real fund-stranding bugs, none
+caught until an actual multi-step gltest lifecycle test was written and
+run (unit tests alone never exercise `_settle`/`re_adjudicate` end to
+end):**
+
+1. **Treasury had no withdrawal path at all.** `treasury_balance: u256`
+   accumulated fee shares and slashed/forfeited bonds in three places but
+   no method ever read or drained it -- `reclaim_bonds` (the only
+   plausibly-named candidate) is a documented no-op. Fixed by replacing
+   the counter with a constructor-immutable `treasury: str` address and
+   routing every fee/forfeiture through the same `_credit()`/`claim()`
+   ledger every other party already uses, rather than inventing a second,
+   parallel payout mechanism.
+2. **A successful appeal's bond was never resolved on the normal path.**
+   `_settle()` (called from `finalize()`) never read or cleared
+   `rec["appeal"]` at all -- only the 7-day `recover_refund` timeout
+   fallback touched it. On the expected, working case (appeal ->
+   re_adjudicate -> finalize with no further appeal), the appellant's
+   bond (min 0.05 GEN, or half a side's stake) was neither refunded nor
+   forfeited -- it just sat in the contract's raw balance, untracked by
+   any ledger field, unrecoverable once `FINALIZED`. Fixed: `_settle()`
+   now resolves it, refunding the appellant if the final verdict differs
+   from the verdict that was appealed (they were right to appeal) or
+   forfeiting to treasury if it doesn't (same rule `lapse_appeal` already
+   used for a stalled appeal).
+3. **`CREATE_BOND` was never returned on a normal settle.** It is
+   refunded by `cancel_event` and slashed by `expire_event`, but
+   `_settle()` -- the path every accepted-and-resolved event actually
+   takes -- never touched it at all. Every single successfully-settled
+   event permanently stranded the creator's 0.05 GEN create bond, the
+   *expected* case, not an edge case. Fixed: `_settle()` now refunds it
+   to the creator unless it was already slashed.
+4. **`re_adjudicate()` silently discarded the original adjudicator's
+   bond.** It resets `rec["adjudicate_bond_payer"]`/`rec["adjudicate_bond"]`
+   to `None` before calling `adjudicate()` again (so the new adjudicator's
+   bond can be recorded) -- but never credited the *previous* adjudicator
+   anything first. Fixed: `re_adjudicate()` now credits the outgoing
+   adjudicator's bond back before resetting those fields.
+
+All four are covered by real `gltest` direct-mode tests
+(`TestAppealBondResolution` in `test_datum_contract.py`) that deploy,
+run a full create -> accept -> adjudicate -> appeal -> re_adjudicate ->
+finalize lifecycle with a mocked LLM response, and assert the exact
+resulting ledger balances -- not just that the code compiles or that a
+unit test of the pure math passes in isolation.
 
 **Leftover:** `claim()`'s last-claimant-absorbs-dust pattern
 (`payout_shares` integer division, tested in `TestEconomics`) means the

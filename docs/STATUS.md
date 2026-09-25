@@ -222,9 +222,15 @@ live contract yet to write to.
 
 ## What the user should run themselves once Studio Dev's FeeManager issue clears
 
+`Datum.__init__` now takes a required `treasury: str` address argument
+(added this session, see CHANGELOG.md's 1.1.3 entry -- the contract
+previously had no withdrawal path for accumulated fees/forfeited bonds at
+all). Pass your own deployer address unless a separate treasury account
+exists:
+
 ```bash
 cd C:\Users\HP\Desktop\datum
-genlayer deploy --contract artifacts/Datum.bundled.py --args []
+genlayer deploy --contract artifacts/Datum.bundled.py --args '["0xYOUR_DEPLOYER_ADDRESS"]'
 ```
 
 If that still reverts with `FeeValueMustBeNonZero`, the platform-side

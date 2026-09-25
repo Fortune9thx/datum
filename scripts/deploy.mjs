@@ -52,9 +52,14 @@ console.log("Contract schema resolved OK. Methods:", Object.keys(schema.methods 
 const fees = await client.estimateTransactionFees({});
 console.log("Estimated fees:", { feeValue: fees.feeValue?.toString(), distribution: fees.distribution });
 
+// Treasury is a constructor-immutable address; defaults to the deployer's
+// own address per this project's documented convention (no separate
+// treasury account exists yet). Fee shares and forfeited bonds credit
+// this address's claimable balance, withdrawable via claim() like any
+// other party -- there is no separate/undrainable treasury ledger.
 const deployTxHash = await client.deployContract({
   code: contractCode,
-  args: [],
+  args: [account.address],
   fees,
 });
 console.log("Deploy tx hash:", deployTxHash);

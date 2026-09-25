@@ -85,10 +85,13 @@ future version of the original author).
 ## First things to do when picking this back up
 
 1. Check whether Studio Dev's `FeeValueMustBeNonZero` issue has cleared:
-   `genlayer deploy --contract artifacts/Datum.bundled.py --args []`. If
-   it still reverts with that exact error, the platform-side issue in
-   `docs/STATUS.md` is still open -- don't re-experiment with fee
-   parameters, three different configurations already failed identically.
+   `genlayer deploy --contract artifacts/Datum.bundled.py --args
+   '["0xYOUR_DEPLOYER_ADDRESS"]'` (the constructor now takes a required
+   `treasury` address, added this session -- see CHANGELOG.md's 1.1.3
+   entry). If it still reverts with `FeeValueMustBeNonZero`, the
+   platform-side issue in `docs/STATUS.md` is still open -- don't
+   re-experiment with fee parameters, three different configurations
+   already failed identically.
 2. Once a deploy succeeds: set `NEXT_PUBLIC_DATUM_CONTRACT_ADDRESS` in
    Vercel (production + preview), redeploy, confirm `eth_getCode` is
    non-empty and the live banner shows the address.
@@ -112,10 +115,14 @@ future version of the original author).
   resolve under SDK version `v0.6.0-rc6` on this machine (see
   `docs/localnet.md`); verify with `genvm-lint check` before ever
   changing it.
-- `Datum.__init__` staying empty -- this SDK's storage generator
-  auto-allocates every declared field at class-definition time; adding a
-  hand-rolled `self.field = TreeMap()` back in will break deploy again
-  (see CHANGELOG.md's 1.1.2 entry for exactly why).
+- `Datum.__init__(self, treasury: str)` only assigning that one scalar
+  field -- this SDK's storage generator auto-allocates every declared
+  `TreeMap` field at class-definition time; adding a hand-rolled
+  `self.field = TreeMap()` back in will break deploy again (see
+  CHANGELOG.md's 1.1.2 entry for exactly why).
+- Routing treasury through the same `claimable`/`claim()` ledger every
+  other party uses, rather than a separate counter -- see CHANGELOG.md's
+  1.1.3 entry for why a separate, undrainable counter was a real bug.
 
 ## Portal submission notes (draft)
 

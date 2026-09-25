@@ -121,15 +121,14 @@ class RefundRecovered(gl.chain.Event):
 
 class Datum(gl.contract.Contract):
     events: TreeMap[str, str]
-    positions: TreeMap[str, str]  # key "<event_id>:<address>"
     creator_open_count: TreeMap[str, u256]
     address_events: TreeMap[str, str]  # address -> json list[event_id]
     claimable: TreeMap[str, u256]  # address -> owed balance
     event_counter: u256
-    treasury_balance: u256
+    treasury: str  # constructor-immutable; fees/forfeitures credit here via claim()
 
-    def __init__(self):
-        pass
+    def __init__(self, treasury: str):
+        self.treasury = treasury
 
     # -----------------------------------------------------------------
     # internal helpers
@@ -143,18 +142,6 @@ class Datum(gl.contract.Contract):
 
     def _save_event(self, event_id: str, rec: dict) -> None:
         self.events[event_id] = json.dumps(rec)
-
-    def _position_key(self, event_id: str, addr: str) -> str:
-        return f"{event_id}:{addr}"
-
-    def _load_position(self, event_id: str, addr: str) -> dict | None:
-        raw = self.positions.get(self._position_key(event_id, addr))
-        if raw is None:
-            return None
-        return json.loads(raw)
-
-    def _save_position(self, event_id: str, addr: str, pos: dict) -> None:
-        self.positions[self._position_key(event_id, addr)] = json.dumps(pos)
 
     def _touch_address_index(self, addr: str, event_id: str) -> None:
         raw = self.address_events.get(addr)
@@ -429,6 +416,17 @@ class Datum(gl.contract.Contract):
         adjudicator = rec.get("adjudicate_bond_payer")
         adjudicate_bond = rec.get("adjudicate_bond") or 0
 
+        # CREATE_BOND is only ever at risk of slashing via expire_event()
+        # (window opened with no acceptor). Once an event reaches _settle()
+        # at all, an acceptor existed -- the creator held up their end, so
+        # their bond returns here regardless of the eventual verdict. Not
+        # returning it here (an earlier version of this contract never
+        # touched create_bond outside cancel_event/expire_event) would
+        # strand it on every single successfully-settled event, the normal
+        # case, not an edge case.
+        if not rec.get("create_bond_slashed"):
+            self._credit(creator, rec["create_bond"])
+
         if rec["verdict"] == "INCONCLUSIVE":
             # deterministic refund path -- zero fee, bond returned.
             self._credit(creator, creator_stake)
@@ -443,7 +441,21 @@ class Datum(gl.contract.Contract):
             self._credit(winner_addr, pot_after_fee)
             if adjudicator:
                 self._credit(adjudicator, adjudicate_bond + adj_share)
-            self.treasury_balance = u256(int(self.treasury_balance) + treasury_share)
+            self._credit(self.treasury, treasury_share)
+
+        # An appeal bond is only ever collected on the way INTO this state
+        # (appeal() -> re_adjudicate() -> here); resolve it now rather than
+        # leaving it stranded in the contract with no ledger entry at all.
+        # Refund the appellant if the appeal changed the outcome (they were
+        # right to appeal); forfeit to treasury if it didn't -- same rule
+        # lapse_appeal() already applies for a stalled appeal.
+        appeal = rec.get("appeal")
+        if appeal:
+            if rec["verdict"] != appeal["prior_verdict"]:
+                self._credit(appeal["appellant"], appeal["bond"])
+            else:
+                self._credit(self.treasury, appeal["bond"])
+            rec["appeal"] = None
 
         rec["state"] = "FINALIZED"
         rec["finalized_at"] = now_ts
@@ -491,7 +503,7 @@ class Datum(gl.contract.Contract):
         self._save_event(event_id, rec)
         EventAppealed(event_id, gl.message.sender_address, ground).emit()
 
-    @gl.public.write
+    @gl.public.write.payable
     def re_adjudicate(self, event_id: str) -> str:
         """Re-runs adjudication for an APPEALED event. VALUE/STATION/
         WINDOW/STATUS grounds re-read the already-stored constitution
@@ -501,6 +513,15 @@ class Datum(gl.contract.Contract):
         rec = self._load_event(event_id)
         if rec["state"] != "APPEALED":
             raise gl.vm.UserError(USER_ERRORS["NOT_PENDING"])
+
+        # The ORIGINAL adjudicator's bond is about to be overwritten by
+        # whoever calls adjudicate() again below -- credit it back now,
+        # or it is silently lost with no ledger entry at all (it is not
+        # the appeal bond, which is resolved separately in _settle()).
+        prior_payer = rec.get("adjudicate_bond_payer")
+        prior_bond = rec.get("adjudicate_bond") or 0
+        if prior_payer and prior_bond:
+            self._credit(prior_payer, prior_bond)
 
         rec["state"] = "ACTIVE"
         rec["adjudicate_bond_payer"] = None
@@ -529,7 +550,7 @@ class Datum(gl.contract.Contract):
         rec["code"] = appeal["prior_code"]
         # appellant's bond is forfeit to treasury for failing to follow
         # through on their own appeal.
-        self.treasury_balance = u256(int(self.treasury_balance) + appeal["bond"])
+        self._credit(self.treasury, appeal["bond"])
         rec["appeal"] = None
         rec["state"] = "VERDICT_PENDING"
         rec["last_state_change_at"] = now_ts
@@ -569,7 +590,7 @@ class Datum(gl.contract.Contract):
             raise gl.vm.UserError("window has not started yet")
 
         self._credit(rec["creator"], rec["creator_stake"])
-        self.treasury_balance = u256(int(self.treasury_balance) + rec["create_bond"])
+        self._credit(self.treasury, rec["create_bond"])
         rec["create_bond_slashed"] = True
         rec["state"] = "EXPIRED"
         rec["last_state_change_at"] = now_ts
