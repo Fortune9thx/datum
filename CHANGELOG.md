@@ -257,3 +257,26 @@ strict, assumption-free re-audit of the current codebase against the full
   by trusting the agent's blanket claim). Recorded as a reminder to
   verify agent-reported findings against the real codebase before fixing
   or documenting them as fact.
+
+## [1.1.6] - 2026-09-25 - Wired the remaining six write methods into the UI
+
+- `app/app/e/[id]/page.tsx` now has buttons for all twelve contract
+  writes, not six: `cancel_event` (creator-only, OPEN state), `expire_event`
+  (OPEN state, anyone), `appeal` (VERDICT_PENDING, a bonded party, within
+  the appeal window, with a ground selector and the correct per-event
+  bond via a new `appealBondWei()` helper mirroring `datum_lib`'s
+  `appeal_bond_amount`), `re_adjudicate` and `lapse_appeal` (APPEALED
+  state), and `reclaim_bonds` (FINALIZED/CANCELED/EXPIRED). An open
+  appeal's details (appellant, ground, bond, prior verdict) are now
+  displayed on the ticket when present.
+- Extended `DatumEvent`/added `AppealInfo` in `types.ts` with the fields
+  this needed (`depth`, `appeal_window`, `create_bond`,
+  `create_bond_slashed`, `adjudicate_bond_payer`, `adjudicate_bond`,
+  `finalized_at`, `appeal`, `last_state_change_at`) -- confirmed against
+  the real contract's event record shape rather than guessed.
+- All conditional rendering is best-effort client-side convenience (state
+  + wallet-identity checks) -- the contract's own guards remain
+  authoritative regardless of what the UI shows or hides.
+- Verified via a clean `next build` and a live render check (no console
+  errors, correct fail-closed empty state). Deployed to
+  https://datum-gamma.vercel.app.

@@ -12,6 +12,15 @@ export type EventState =
 export type Verdict = "YES" | "NO" | "INCONCLUSIVE" | null;
 export type Code = "CLEAR" | "MISSING" | "CONFLICT" | "PRELIMINARY_BLOCKED" | null;
 
+export interface AppealInfo {
+  appellant: string;
+  ground: "VALUE" | "STATION" | "WINDOW" | "STATUS" | "REVISED";
+  bond: string | number;
+  opened_at: number;
+  prior_verdict: Verdict;
+  prior_code: Code;
+}
+
 export interface DatumEvent {
   id: string;
   creator: string;
@@ -20,6 +29,7 @@ export interface DatumEvent {
   class: InstrumentClass;
   station_id: string | null;
   bbox: [number, number, number, number] | null;
+  depth: number | null;
   metric: string;
   threshold: number;
   cmp: Cmp;
@@ -27,15 +37,23 @@ export interface DatumEvent {
   publishers: string[];
   product_status_policy: ProductStatusPolicy;
   tolerance: number;
+  appeal_window: number;
   constitution_hash: string;
   creator_side: "YES" | "NO";
   creator_stake: number;
   acceptor: string | null;
   acceptor_side: "YES" | "NO" | null;
   acceptor_stake: number | null;
+  create_bond: string | number;
+  create_bond_slashed: boolean;
+  adjudicate_bond_payer: string | null;
+  adjudicate_bond: string | number | null;
   verdict: Verdict;
   code: Code;
   agreed_value: number | null;
+  finalized_at: number | null;
+  appeal: AppealInfo | null;
+  last_state_change_at: number;
 }
 
 /** Every list view on the contract is paginated with this envelope. */

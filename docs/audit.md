@@ -303,18 +303,21 @@ correctly; only the diagnostic message differs. See
    enforcement (the primary QUAKES safety property) is code-enforced;
    depth is not. Worth closing in a follow-up if QUAKES events with a
    non-default depth see real use.
-5. **Six of the twelve write methods have no frontend UI at all yet:**
-   `appeal`, `re_adjudicate`, `lapse_appeal`, `cancel_event`,
-   `expire_event`, and `reclaim_bonds` are all correctly implemented in
-   `frontend/src/lib/datum/sdk.ts` (and, for `re_adjudicate`, correctly
-   fixed this session to attach `ADJUDICATE_BOND` -- see item 6 below) but
-   are not called from any page or button in `frontend/app/`. A steward
-   reading `docs/STATUS.md`'s "no contract deployed yet" framing should
-   not read that as "the write path is otherwise complete" -- roughly
-   half of it has no UI entry point regardless of deploy status. The six
-   that ARE wired (`create_event`, `accept_event`, `adjudicate`,
-   `finalize`, `claim`, `recover_refund`) were verified end-to-end against
-   the SDK's actual parameter signatures this session (see item 6).
+5. **RESOLVED.** All twelve write methods now have a UI entry point.
+   `appeal` (with a ground selector and the correct per-event
+   `appealBondWei()`-computed bond), `re_adjudicate`, `lapse_appeal`,
+   `cancel_event`, `expire_event`, and `reclaim_bonds` were added to the
+   ticket page (`app/app/e/[id]/page.tsx`), conditionally rendered by
+   `event.state` and, for creator/appellant-restricted actions, by the
+   connected wallet's relationship to the event (best-effort client-side
+   gating only -- the contract's own checks remain authoritative
+   regardless of what renders). An open appeal's `appellant`/`ground`/
+   `bond`/`prior_verdict` are now also displayed when present. Verified
+   via a clean `next build` and a live fail-closed render check (no
+   console errors); the buttons themselves are gated behind a real
+   `event` object and so cannot be visually exercised without a live
+   contract, same limitation as the six write buttons that predate this
+   fix.
 6. **Two real, confirmed frontend/SDK bugs found and fixed this
    session**, found by actually reading every wired call site against its
    contract-side requirement rather than trusting that "the button exists"

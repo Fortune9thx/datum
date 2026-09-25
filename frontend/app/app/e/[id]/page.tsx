@@ -9,14 +9,26 @@ import { ActionButton, WriteNote, useWriteGate } from "@/src/components/actions"
 import { useWallet } from "@/src/components/Wallet";
 import { getEvent, getRecord, write } from "@/src/lib/datum/sdk";
 import { CLASSES, STATE_LABELS } from "@/src/lib/datum/registry";
-import { formatGen, formatScaledValue, formatWindowCompact, parseGenToWei } from "@/src/lib/datum/format";
-import type { DatumEvent, DatumRecord, SourceRow } from "@/src/lib/datum/types";
+import {
+  appealBondWei,
+  formatGen,
+  formatScaledValue,
+  formatWindowCompact,
+  parseGenToWei,
+} from "@/src/lib/datum/format";
+import type { AppealInfo, DatumEvent, DatumRecord, SourceRow } from "@/src/lib/datum/types";
 
 // Immutable economics, must match contracts/datum_lib.py exactly --
 // ADJUDICATE_BOND = 2 * 10**16 (0.02 GEN). accept_event's required value
 // is the event's own creator_stake, read from the loaded record instead
-// (it varies per event, unlike the bond).
+// (it varies per event, unlike the bond). Appeal bond is computed from
+// the event's own creator_stake via appealBondWei(), since it scales
+// with the wager, not a fixed constant like the other two.
 const ADJUDICATE_BOND_GEN = "0.02";
+
+const APPEAL_GROUNDS: AppealInfo["ground"][] = ["VALUE", "STATION", "WINDOW", "STATUS", "REVISED"];
+
+const LAPSE_APPEAL_STALL_SECONDS = 60 * 60; // must match datum_lib.LAPSE_APPEAL_STALL
 
 export default function TicketPage() {
   const params = useParams<{ id: string }>();
@@ -29,6 +41,7 @@ export default function TicketPage() {
   const [record, setRecord] = useState<DatumRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState(0);
+  const [ground, setGround] = useState<AppealInfo["ground"]>("VALUE");
 
   useEffect(() => {
     if (status.kind === "loading") return;
@@ -56,6 +69,20 @@ export default function TicketPage() {
   const sources = record?.accepted_record?.sources ?? null;
   const publisherIds = sources ? Object.keys(sources) : event?.publishers ?? [];
   const account = (wallet.account ?? "0x") as `0x${string}`;
+
+  // Best-effort client-side gating so irrelevant buttons don't clutter the
+  // page -- the contract's own checks remain authoritative regardless of
+  // what renders here; a stale client clock or state read never grants a
+  // write that the contract would otherwise refuse.
+  const nowSec = Math.floor(Date.now() / 1000);
+  const isCreator = !!wallet.account && !!event && wallet.account.toLowerCase() === event.creator.toLowerCase();
+  const isAcceptor = !!wallet.account && !!event?.acceptor && wallet.account.toLowerCase() === event.acceptor.toLowerCase();
+  const isParty = isCreator || isAcceptor;
+  const appealBond = event ? appealBondWei(event.creator_stake) : 0n;
+  const appealWindowOpen =
+    !!event && nowSec < event.last_state_change_at + event.appeal_window;
+  const appealStalled =
+    !!event?.appeal && nowSec >= event.appeal.opened_at + LAPSE_APPEAL_STALL_SECONDS;
 
   return (
     <>
@@ -188,7 +215,108 @@ export default function TicketPage() {
                   ghost
                   run={() => write.recoverRefund(account, eventId)}
                 />
+
+                {event.state === "OPEN" && (
+                  <ActionButton
+                    label="Cancel"
+                    reason={reason ?? (isCreator ? null : "only the creator can cancel")}
+                    ghost
+                    run={() => write.cancelEvent(account, eventId)}
+                  />
+                )}
+
+                {event.state === "OPEN" && (
+                  <ActionButton
+                    label="Expire (slash create bond)"
+                    reason={reason}
+                    ghost
+                    run={() => write.expireEvent(account, eventId)}
+                  />
+                )}
+
+                {event.state === "VERDICT_PENDING" && (
+                  <ActionButton
+                    label={`Appeal (${ground}) · ${formatGen(appealBond.toString())} GEN`}
+                    reason={
+                      reason ??
+                      (!isParty
+                        ? "only a bonded party can appeal"
+                        : !appealWindowOpen
+                          ? "appeal window has closed"
+                          : null)
+                    }
+                    ghost
+                    run={() => write.appeal(account, eventId, ground, appealBond)}
+                  />
+                )}
+
+                {event.state === "APPEALED" && (
+                  <ActionButton
+                    label={`Re-adjudicate · ${ADJUDICATE_BOND_GEN} GEN`}
+                    reason={reason}
+                    ghost
+                    run={() =>
+                      write.reAdjudicate(
+                        account,
+                        eventId,
+                        BigInt(parseGenToWei(ADJUDICATE_BOND_GEN))
+                      )
+                    }
+                  />
+                )}
+
+                {event.state === "APPEALED" && (
+                  <ActionButton
+                    label="Lapse appeal (restore prior verdict)"
+                    reason={
+                      reason ?? (appealStalled ? null : "appeal has not stalled yet (1h)")
+                    }
+                    ghost
+                    run={() => write.lapseAppeal(account, eventId)}
+                  />
+                )}
+
+                {(event.state === "FINALIZED" ||
+                  event.state === "CANCELED" ||
+                  event.state === "EXPIRED") && (
+                  <ActionButton
+                    label="Reclaim bonds (receipt)"
+                    reason={reason}
+                    ghost
+                    run={() => write.reclaimBonds(account, eventId)}
+                  />
+                )}
               </div>
+
+              {event.state === "VERDICT_PENDING" && isParty && (
+                <div className="field" style={{ maxWidth: 220, marginTop: 4 }}>
+                  <label className="field-label">Appeal ground</label>
+                  <select
+                    className="select"
+                    value={ground}
+                    onChange={(e) => setGround(e.target.value as AppealInfo["ground"])}
+                  >
+                    {APPEAL_GROUNDS.map((g) => (
+                      <option key={g} value={g}>
+                        {g}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {event.appeal && (
+                <div style={{ marginTop: 16 }}>
+                  <div className="label" style={{ marginBottom: 8 }}>
+                    <span>OPEN APPEAL</span>
+                  </div>
+                  <KV k="appellant" v={<span className="mono">{event.appeal.appellant}</span>} />
+                  <KV k="ground" v={event.appeal.ground} />
+                  <KV k="bond" v={`${formatGen(String(event.appeal.bond))} GEN`} />
+                  <KV k="prior verdict" v={event.appeal.prior_verdict ?? "--"} />
+                </div>
+              )}
+
               <WriteNote reason={reason} />
             </div>
           </div>

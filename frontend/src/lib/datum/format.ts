@@ -1,5 +1,19 @@
 export const VALUE_SCALE = 100;
 
+/** Must match datum_lib.py's APPEAL_BOND_FLOOR exactly (0.05 GEN, wei). */
+export const APPEAL_BOND_FLOOR_WEI = 5n * 10n ** 16n;
+
+/**
+ * Mirrors datum_lib.appeal_bond_amount(one_side_stake): half of one
+ * side's stake, floored at APPEAL_BOND_FLOOR. Takes a wei-like stake
+ * (string/number, avoiding float precision loss) and returns wei.
+ */
+export function appealBondWei(oneSideStakeWei: string | number | null | undefined): bigint {
+  const stake = BigInt(oneSideStakeWei ?? 0);
+  const half = stake / 2n;
+  return half > APPEAL_BOND_FLOOR_WEI ? half : APPEAL_BOND_FLOOR_WEI;
+}
+
 /** Formats a VALUE_SCALE-scaled integer (string or number) back to a decimal string. */
 export function formatScaledValue(scaled: string | number | null | undefined): string {
   if (scaled === null || scaled === undefined) return "--";
