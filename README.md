@@ -4,7 +4,7 @@ DATUM settles one question on-chain: did a named instrument at a named official 
 
 **Live app:** https://datum-gamma.vercel.app — reading the live contract (LIVE banner with the deployed address; board is empty because no events exist yet, never placeholder rows).
 
-**Contract:** [`0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3`](https://explorer-studio-dev.genlayer.com/address/0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3) — Studio Next, chain 61997. Deploy tx [`0x84b5319b1ca744c47a0c3c36894e69cf3466c0cc3c876f4fcecf8315c440ae03`](https://explorer-studio-dev.genlayer.com/tx/0x84b5319b1ca744c47a0c3c36894e69cf3466c0cc3c876f4fcecf8315c440ae03), ACCEPTED.
+**Contract:** [`0xAafb496351df0EEa478c26d7E2f19A3B71d6cE9A`](https://explorer-studio-dev.genlayer.com/address/0xAafb496351df0EEa478c26d7E2f19A3B71d6cE9A) — Studio Next, chain 61997. Deploy tx [`0xa2fec0feab81b75789ce9ca422724c3c85433077389aed0c2552cc91fba4cce9`](https://explorer-studio-dev.genlayer.com/tx/0xa2fec0feab81b75789ce9ca422724c3c85433077389aed0c2552cc91fba4cce9), ACCEPTED.
 
 **Create tx:** payable `create_event` has not yet landed on-chain. `genlayer write` (the CLI) cannot attach GEN to any payable method — confirmed by reading its source. `scripts/create_event.mjs` builds a real constitution from the contract's own live registry and config and calls `create_event` with the correct value attached; it needs the deployer keystore's password to run, which is never stored or guessed. Exact command and full detail in [docs/deployment.md](docs/deployment.md).
 
@@ -122,10 +122,11 @@ Stated explicitly rather than left to be inferred from where a claim appears:
 **Proven on real Studio Next execution:**
 - Deploy itself (constructor, storage allocation, all 22 methods registered) -- `gen_getContractSchema` against the live address.
 - A real read (`get_config`) returning real on-chain state.
-- A real non-payable write (`expire_event` on a nonexistent id) returning the contract's own `event not found` UserError from a real consensus round -- proves write dispatch and error handling execute on-chain, not just in a mock.
+- The checksum-normalization fix -- `get_claimable` returns the same checksummed address whether queried with a lowercase or checksummed input.
+- On the prior deployment (superseded, same contract logic minus this repo's two most recent fixes -- see git history): a real non-payable write (`expire_event` on a nonexistent id) returning the contract's own `event not found` UserError from a real consensus round, and a real payable `create_event` reaching `FINALIZED` with the correct value attached.
 
-**Proven only in `gltest` direct-mode (a real GenVM sandbox, but a single in-process leader, not real multi-validator consensus), not yet on-chain:**
-- Every payable method: `create_event`, `accept_event`, `adjudicate`, `appeal`, `re_adjudicate`. No GEN has moved through this contract on any live network yet.
+**Proven only in `gltest` direct-mode (a real GenVM sandbox, but a single in-process leader, not real multi-validator consensus), not yet re-run against this specific deployment:**
+- Every payable method: `create_event`, `accept_event`, `adjudicate`, `appeal`, `re_adjudicate`.
 - The lying-leader rejection (`adjudicate()`'s validator independently re-fetching and rejecting a leader whose result disagrees) -- proven at the `datum_lib` comparator level and via `gltest`'s single-leader execution, but never against two genuinely independent GenVM nodes actually disagreeing, which `gltest` cannot simulate.
 - `claim()`'s actual payout -- proven at the internal ledger-accounting level (`claimable` zeroes, the right amount is returned) in `gltest`, not as a real GEN balance delta on a live account, since no real stake has moved yet to claim.
 - The other six write methods with frontend UI entry points (`appeal`, `re_adjudicate`, `lapse_appeal`, `cancel_event`, `expire_event`, `reclaim_bonds`) -- type-checked, never clicked through a live wallet.
@@ -147,11 +148,12 @@ Stated explicitly rather than left to be inferred from where a claim appears:
 ```bash
 python scripts/build_bundle.py
 genlayer deploy --contract artifacts/Datum.bundled.py \
-  --args '"0xYOUR_TREASURY_ADDRESS"' \
+  --args 0xYOUR_TREASURY_ADDRESS \
   --fees '{"distribution":{"rotations":[0],"appealRounds":0,"totalMessageFees":0,"executionConsumed":0,"receiptFeeMaxGasPrice":"300000000","storageFeeMaxGasPrice":"300000000","maxPriceGenPerTimeUnit":"2","executionBudgetPerRound":"94643100000000","leaderTimeunitsAllocation":"100","validatorTimeunitsAllocation":"200"}}' \
   --fee-value 94643100002588
 ```
 
 Needs BOTH a complete fee distribution (not just `--fee-value`) and a
-JSON-quoted string argument (`--args '"0x..."'`, not `'["0x..."]'`) --
-full diagnosis of why the naive form fails in [docs/deployment.md](docs/deployment.md).
+bare, unquoted address argument (`--args 0x...`, never `'"0x..."'` or
+`'["0x..."]'`) -- full diagnosis of why the other forms fail in
+[docs/deployment.md](docs/deployment.md).

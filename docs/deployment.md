@@ -5,32 +5,26 @@
 | | |
 |---|---|
 | Network | Studio Next (chain 61997) |
-| Contract | `0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3` |
-| Deploy tx | `0x84b5319b1ca744c47a0c3c36894e69cf3466c0cc3c876f4fcecf8315c440ae03` |
-| Explorer | https://explorer-studio-dev.genlayer.com/address/0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3 |
+| Contract | `0xAafb496351df0EEa478c26d7E2f19A3B71d6cE9A` |
+| Deploy tx | `0xa2fec0feab81b75789ce9ca422724c3c85433077389aed0c2552cc91fba4cce9` |
+| Explorer | https://explorer-studio-dev.genlayer.com/address/0xAafb496351df0EEa478c26d7E2f19A3B71d6cE9A |
 | Treasury | `0xC6E6d3b2acCaECeCeB40Ad4bD3dF123DDCB4e537` |
 
-Machine-readable record: [`deploy/deployments.json`](../deploy/deployments.json). Its `bundleSha256` must match `sha256(artifacts/Datum.bundled.py)` — as of the redeploy blocker below, it currently does **not**; see that section before assuming the two are in sync.
+Machine-readable record: [`deploy/deployments.json`](../deploy/deployments.json). Its `bundleSha256` matches `sha256(artifacts/Datum.bundled.py)`.
 
 Studio Next is a development preview and resets periodically. If the contract address stops resolving, it was reset — redeploy with the command below and update `deploy/deployments.json` and the `NEXT_PUBLIC_DATUM_CONTRACT_ADDRESS` environment variable.
 
-## Known issue: redeploy currently blocked (hosted `__init__` execution)
+This deployment supersedes `0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3`, which is now abandoned — it never held any events, and predates both the checksum-normalization fix and the steward-requested adjudication binding fix (see `docs/audit.md`).
 
-A source change added `Address(treasury).as_hex` normalization to the constructor (closing a checksum-case bug in `get_position`/`get_positions`/`get_claimable`/`get_activity` — see `docs/audit.md`). That change is committed and passes every local check, but it has not been possible to ship it to a live contract: three consecutive deploy attempts on Studio Next failed with `FINISHED_WITH_ERROR` (transaction `ACCEPTED`, constructor execution reverted):
+## Deploy arguments must not be JSON-quoted
 
-- `0x98bcbc8c455f66792ffbbfd7093932e990b3b93c84845a2626aa951450b8cc19` — full DATUM bundle, explicit `--fee-value`.
-- `0xd1801f67d2db6653574c4df6f1be00237eaec9f442fb1d8ae8a4e9c5fd8de146` — full DATUM bundle, `--fee-value` omitted (CLI auto-derived).
-- `0x7d39c9105005dd7d00f6ff87e9328054987f3bedd4b58eb005293dde2b0829b3` — a minimal 20-line isolation contract (`contracts/ProbeTreasury.py`), same pinned dependency hash, whose entire constructor is `self.treasury = Address(treasury).as_hex` and nothing else.
+Three consecutive redeploy attempts of the fixed contract failed with `FINISHED_WITH_ERROR` (transaction `ACCEPTED`, constructor execution reverted) — even a minimal 20-line isolation contract whose entire constructor was `self.treasury = Address(treasury).as_hex` and nothing else failed identically. At the time this looked like a hosted-runtime issue: the exact same bundle and treasury argument deployed and ran correctly in a local `gltest` reproduction, and the real SDK's `Address`/`Keccak256` implementation is pure Python with no native dependencies, so a genuine local/hosted behavior split seemed implausible but unproven.
 
-The third result is the important one: it rules out anything specific to DATUM's size or structure. Ruled out directly:
+**It was never a hosted-runtime bug.** A fourth isolation contract — same plain constructor, but with an added view method that calls `Address(raw).as_hex` on an argument supplied at call time rather than at deploy time — deployed fine, and calling that view method through `genlayer call ... --args "0x..."` (the JSON-quoted form used everywhere in this project's own docs and scripts up to this point) failed with `binascii.Error: Only base64 data is allowed`. Decoding the actual calldata sent showed why: the literal double-quote characters were embedded inside the string value itself (`"0xc6e6d3b2...537"`, quotes included, 44 characters instead of 42), so `Address(...)`'s own `val.startswith('0x')` check was false — the value didn't start with `0x`, it started with `"`. Calling the same view method with the address passed **bare, with no surrounding quotes**, worked immediately and returned the correct checksummed form.
 
-- **Fee/gas budget** — identical failure with and without an explicit `--fee-value`.
-- **A logic bug in the change itself** — the exact same bundle, treasury argument, and pinned SDK version (`v0.6.0-rc6`) deploy and execute correctly in a local `gltest` reproduction (`__init__`, `get_config()`, and `get_claimable()` all succeed).
-- **A WASM-sandbox portability gap** — the real SDK's `Address.as_hex`/`Keccak256` implementation is pure Python with no native dependencies, so there's no reason it would behave differently in the hosted sandbox than locally.
+Every prior deploy attempt used the quoted form (`--args '"0xADDR"'`), which is why every one of them — regardless of fee configuration, bundle size, or how minimal the isolation contract was — failed identically inside any code path that called `Address(...)` on the constructor argument: the string it received always had two extra literal quote characters glued onto it by the CLI's own argument handling. A constructor that just does `self.treasury = treasury` (no `Address()` call) never notices, since any string is valid there — which is exactly why the *original* pre-fix deployment, which never called `Address()` on its constructor argument, always worked. The two facts only looked contradictory before this was isolated.
 
-Studio Next's debug-trace RPC (`gen_dbg_traceTransaction`) returns `Method not found` on the hosted API, so no traceback is retrievable for any of the three failures. The working conclusion — not a proven root cause, the best-supported explanation after ruling out the above — is that the hosted runner for this pinned dependency hash currently behaves differently from the local cached SDK build for at least this constructor pattern. `genlayer-studio`'s GitHub issues have several other open, unrelated infrastructure-correctness reports filed in the same window (e.g. #1757, #1761, #1767–#1769), consistent with broader instability rather than a DATUM-specific regression, though none matches this exact symptom.
-
-**Decision:** stop spending GEN on further blind retries. The live contract at `0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3` (see above) is unaffected and keeps running the pre-fix code — the frontend continues pointing at it. The checksum fix stays committed in source (`contracts/Datum.py`, `artifacts/Datum.bundled.py`) and will ship on the next redeploy attempt, once this clears. If retrying: try again after a delay (this network's infra issues have historically been transient), and if it fails identically again, file a `genlayer-studio` issue with this exact reproduction — the existing open issues don't cover it.
+**Correct deploy argument syntax:** pass an address as a bare token — `--args 0xADDR`, no quotes — not `--args '"0xADDR"'`. The earlier finding that a JSON *array* form (`--args '["0xADDR"]'`) gets parsed as a single list-valued argument is still accurate and still avoided by not using brackets; quoting a single address as a JSON string turned out to introduce its own, different bug rather than being the fix it looked like at the time.
 
 ## Verifying a deployment is live
 
@@ -39,7 +33,7 @@ Studio Next's debug-trace RPC (`gen_dbg_traceTransaction`) returns `Method not f
 ```bash
 curl -s https://studio-dev.genlayer.com/api \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"gen_getContractSchema","params":["0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3"]}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"gen_getContractSchema","params":["0xAafb496351df0EEa478c26d7E2f19A3B71d6cE9A"]}'
 ```
 
 A live contract returns its method schema. A nonexistent one returns JSON-RPC error `-32001`. The frontend's `probeContract()` (`frontend/src/lib/datum/network.ts`) uses this method.
@@ -47,7 +41,7 @@ A live contract returns its method schema. A nonexistent one returns JSON-RPC er
 A read call is a simpler check:
 
 ```bash
-genlayer call 0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3 get_config
+genlayer call 0xAafb496351df0EEa478c26d7E2f19A3B71d6cE9A get_config
 ```
 
 ## Deploying
@@ -55,14 +49,14 @@ genlayer call 0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3 get_config
 ```bash
 python scripts/build_bundle.py
 genlayer deploy --contract artifacts/Datum.bundled.py \
-  --args '"0xYOUR_TREASURY_ADDRESS"' \
+  --args 0xYOUR_TREASURY_ADDRESS \
   --fees '{"distribution":{"rotations":[0],"appealRounds":0,"totalMessageFees":0,"executionConsumed":0,"receiptFeeMaxGasPrice":"300000000","storageFeeMaxGasPrice":"300000000","maxPriceGenPerTimeUnit":"2","executionBudgetPerRound":"94643100000000","leaderTimeunitsAllocation":"100","validatorTimeunitsAllocation":"200"}}' \
   --fee-value 94643100002588
 ```
 
 Two details matter here:
 
-- **`--args` must be a JSON-quoted string** (`'"0x..."'`), not a JSON array (`'["0x..."]'`). The constructor takes a single `treasury: str` argument; passing an array causes the CLI to hand the contract a list instead of a string.
+- **`--args` must be a bare token** (`0xADDR`), never wrapped in quotes (`'"0xADDR"'` embeds literal quote characters into the string) and never a JSON array (`'["0xADDR"]'` gets parsed as a single list-valued argument instead of a string). See "Deploy arguments must not be JSON-quoted" above.
 - **`--fees` needs a complete distribution object**, not just `--fee-value`. An incomplete distribution is rejected by the network before the transaction is broadcast. The values above were taken from a confirmed successful deployment on this network and are safe defaults to reuse.
 
 After a successful deploy, set the contract address in Vercel and redeploy the frontend:
@@ -91,7 +85,6 @@ Non-payable writes (`finalize`, `cancel_event`, `expire_event`, `lapse_appeal`, 
 
 - Deploy, storage allocation, and method registration — confirmed via `gen_getContractSchema`.
 - A live read (`get_config`).
-- A live non-payable write (`expire_event` on a nonexistent id) returning the contract's own `event not found` error from a real consensus round: [`0x01809ec4ac941cb0b6feba525599153dfc0c1cc13e87cd2da295714fac31fe71`](https://explorer-studio-dev.genlayer.com/tx/0x01809ec4ac941cb0b6feba525599153dfc0c1cc13e87cd2da295714fac31fe71).
-- A live payable write (`create_event`, QUAKES class, 0.10 GEN stake + 0.05 GEN create bond) through the frontend with a real connected wallet, reaching `FINALIZED`: [`0xef19765e065d100839a212f0026699ab17867f190e0a7400ea4f656d8a061177`](https://explorer-studio-dev.genlayer.com/tx/0xef19765e065d100839a212f0026699ab17867f190e0a7400ea4f656d8a061177) (`value` on-chain: `150000000000000000` wei, matching the expected stake + bond exactly).
+- The checksum-normalization fix, confirmed live: `get_claimable` returns the same checksummed address whether queried with a lowercase or checksummed input.
 
-The remaining lifecycle (`accept_event`, `adjudicate`, `finalize`, `claim`) on this same event is in progress. Local test coverage for every write method, including payable ones, is documented in [testing.md](testing.md).
+Payable methods have not yet been called against this specific deployment (they were proven on the prior, now-abandoned address — see git history — but not yet re-run here). Local test coverage for every write method, including payable ones, is documented in [testing.md](testing.md).

@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.4.1] - 2026-09-26
+
+### Fixed
+
+- Redeployed to `0xAafb496351df0EEa478c26d7E2f19A3B71d6cE9A`, carrying the 1.4.0 checksum and adjudication-binding fixes live for the first time -- the prior deployment predated both. Root cause of the three earlier failed redeploy attempts found and fixed: `genlayer deploy`'s `--args '"0x..."'` (JSON-quoted) form embeds the literal quote characters into the argument string itself, which broke every `Address(...)` call on a deploy-time constructor argument. It was never a hosted-runtime bug -- passing the address as a bare, unquoted token (`--args 0x...`) resolves it. Full writeup in `docs/deployment.md`.
+
 ## [1.4.0] - 2026-09-26
 
 ### Fixed
