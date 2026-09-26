@@ -92,5 +92,6 @@ Non-payable writes (`finalize`, `cancel_event`, `expire_event`, `lapse_appeal`, 
 - Deploy, storage allocation, and method registration — confirmed via `gen_getContractSchema`.
 - A live read (`get_config`).
 - A live non-payable write (`expire_event` on a nonexistent id) returning the contract's own `event not found` error from a real consensus round: [`0x01809ec4ac941cb0b6feba525599153dfc0c1cc13e87cd2da295714fac31fe71`](https://explorer-studio-dev.genlayer.com/tx/0x01809ec4ac941cb0b6feba525599153dfc0c1cc13e87cd2da295714fac31fe71).
+- A live payable write (`create_event`, QUAKES class, 0.10 GEN stake + 0.05 GEN create bond) through the frontend with a real connected wallet, reaching `FINALIZED`: [`0xef19765e065d100839a212f0026699ab17867f190e0a7400ea4f656d8a061177`](https://explorer-studio-dev.genlayer.com/tx/0xef19765e065d100839a212f0026699ab17867f190e0a7400ea4f656d8a061177) (`value` on-chain: `150000000000000000` wei, matching the expected stake + bond exactly).
 
-Payable methods have not yet been called against this deployment. Local test coverage for every write method, including payable ones, is documented in [testing.md](testing.md).
+The remaining lifecycle (`accept_event`, `adjudicate`, `finalize`, `claim`) on this same event is in progress. Local test coverage for every write method, including payable ones, is documented in [testing.md](testing.md).
