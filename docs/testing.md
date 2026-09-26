@@ -10,7 +10,7 @@ Two layers of tests, both run without needing a live deployment.
 python -m pytest tests/direct/test_datum_lib.py -q
 ```
 
-64 tests covering constitution validation, unit conversion, volatile-key stripping, the full envelope acceptance/rejection logic, economics (fee split, appeal bond floor, payout rounding), and comparator behavior: given two independently-derived envelopes, the contract's equivalence logic accepts only when they agree and rejects on any disagreement in usability, station id, tolerance, or window.
+71 tests covering constitution validation, unit conversion, volatile-key stripping, the full envelope acceptance/rejection logic, economics (fee split, appeal bond floor, payout rounding), and comparator behavior: given two independently-derived envelopes, the contract's equivalence logic accepts only when they agree and rejects on any disagreement in usability, station id, tolerance, or window. Also covers envelope-level binding: an envelope claiming the wrong `event_id`, or containing a `sources` key that isn't one of the locked `publishers`, is refused outright, and a usable source's full provenance row (including its `raw`-citation digest) is retained for the evidence view.
 
 ## Integration tests (`gltest`)
 
@@ -21,7 +21,7 @@ python scripts/build_bundle.py
 python -m pytest tests/direct/test_datum_contract.py -q
 ```
 
-27 tests, covering both the success path and the refusal path for every one of the twelve write methods: `create_event`, `accept_event`, `adjudicate`, `finalize`, `appeal`, `re_adjudicate`, `lapse_appeal`, `cancel_event`, `expire_event`, `claim`, `recover_refund`, `reclaim_bonds`. Payable calls attach real value via `direct_vm.value`; multi-account flows use `direct_vm.prank`.
+30 tests, covering both the success path and the refusal path for every one of the twelve write methods: `create_event`, `accept_event`, `adjudicate`, `finalize`, `appeal`, `re_adjudicate`, `lapse_appeal`, `cancel_event`, `expire_event`, `claim`, `recover_refund`, `reclaim_bonds`. Payable calls attach real value via `direct_vm.value`; multi-account flows use `direct_vm.prank`. Three of these exercise the same event-id/publisher-key binding and evidence-provenance schema against a real deploy, not just the pure-logic level.
 
 `gltest` clears its own `artifacts/` output directory at session start, so rebuild the bundle before each run.
 

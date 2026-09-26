@@ -77,26 +77,29 @@ Full typed signatures in `contracts/Datum.py`.
 
 ```bash
 # Primary, verified coverage -- zero genlayer imports, plain pytest.
-# Includes 5 dedicated "lying leader" tests: reproduces adjudicate()'s
-# real validator comparison and proves a leader whose independent
-# re-fetch would disagree (on usability, station id, tolerance, or
-# window) is rejected.
+# Includes dedicated "lying leader" tests (reproduces adjudicate()'s real
+# validator comparison and proves a leader whose independent re-fetch
+# would disagree is rejected) and event-id / publisher-key binding tests
+# (an envelope for the wrong event, or keyed by an unauthorized publisher,
+# is refused outright).
 python -m pytest tests/direct/test_datum_lib.py -q
-# 64 passed
+# 71 passed
 
 # Rebuild the deployable bundle + size check:
 python scripts/build_bundle.py
-# 41489 bytes, well under the 52224-byte Studio ceiling -- sha256 matches
-# the deployed contract exactly, see deploy/deployments.json
+# well under the 52224-byte Studio ceiling -- see deploy/deployments.json
+# for the currently-deployed bundle's own sha256 and whether it's still
+# in sync with this working tree
 
 # AST-based safety lint + full runtime validation, both on the bundle:
 PYTHONIOENCODING=utf-8 genvm-lint check artifacts/Datum.bundled.py
 # Lint passed (3 checks); Validation passed; 22 methods (10 view, 12 write)
 
 # gltest direct-mode: real deploy + happy path AND refusal path for
-# EVERY one of the 12 write methods, against a live GenVM sandbox:
+# EVERY one of the 12 write methods, against a live GenVM sandbox --
+# including the same event-id / publisher-key binding checks end to end:
 python -m pytest tests/direct/test_datum_contract.py -q
-# 27 passed
+# 30 passed
 ```
 
 ## Network

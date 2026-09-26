@@ -255,8 +255,43 @@ def _window():
     return (NOW + 3 * 3600, NOW + 3 * 3600 + 6 * 3600)
 
 
+def _raw_for(**fields) -> str:
+    """A plausible raw source payload, distinct from the model's own
+    structured extraction -- includes a volatile-looking key so digest
+    tests actually exercise stable_digest()'s stripping, not just hash any
+    string."""
+    payload = {"generationtime_ms": 4.2}
+    payload.update(fields)
+    return json.dumps(payload)
+
+
 class TestSourceReadingValidation:
     def test_usable_reading(self):
+        window = _window()
+        raw = _raw_for(stationId="USW00094728", value=12.3, unit="mm")
+        reading = {
+            "usable": True,
+            "station_id": "USW00094728",
+            "t": window[0] + 100,
+            "value_native": 12.3,
+            "unit": "mm",
+            "product_status": "FINAL",
+            "raw": raw,
+        }
+        row = lib.validate_source_reading(
+            instrument_class="STATION_PRECIP",
+            expected_station_id="USW00094728",
+            expected_bbox=None,
+            window=window,
+            product_status_policy="FINAL_ONLY",
+            reading=reading,
+        )
+        assert row["usable"] is True
+        assert row["reason"] is None
+        assert row["converted"] == 1230
+        assert row["digest"] == lib.stable_digest(raw)
+
+    def test_missing_raw_citation_unusable(self):
         window = _window()
         reading = {
             "usable": True,
@@ -265,8 +300,9 @@ class TestSourceReadingValidation:
             "value_native": 12.3,
             "unit": "mm",
             "product_status": "FINAL",
+            # no "raw" field at all -- cannot be authenticated.
         }
-        ok, reason, converted = lib.validate_source_reading(
+        row = lib.validate_source_reading(
             instrument_class="STATION_PRECIP",
             expected_station_id="USW00094728",
             expected_bbox=None,
@@ -274,9 +310,32 @@ class TestSourceReadingValidation:
             product_status_policy="FINAL_ONLY",
             reading=reading,
         )
-        assert ok is True
-        assert reason is None
-        assert converted == 1230
+        assert row["usable"] is False
+        assert row["reason"] == "missing raw source citation"
+        assert row["converted"] is None
+        assert row["digest"] is None
+
+    def test_blank_raw_citation_unusable(self):
+        window = _window()
+        reading = {
+            "usable": True,
+            "station_id": "USW00094728",
+            "t": window[0] + 100,
+            "value_native": 12.3,
+            "unit": "mm",
+            "product_status": "FINAL",
+            "raw": "   ",
+        }
+        row = lib.validate_source_reading(
+            instrument_class="STATION_PRECIP",
+            expected_station_id="USW00094728",
+            expected_bbox=None,
+            window=window,
+            product_status_policy="FINAL_ONLY",
+            reading=reading,
+        )
+        assert row["usable"] is False
+        assert row["reason"] == "missing raw source citation"
 
     def test_station_id_mismatch_unusable(self):
         window = _window()
@@ -287,8 +346,9 @@ class TestSourceReadingValidation:
             "value_native": 12.3,
             "unit": "mm",
             "product_status": "FINAL",
+            "raw": _raw_for(stationId="WRONGID001", value=12.3, unit="mm"),
         }
-        ok, reason, converted = lib.validate_source_reading(
+        row = lib.validate_source_reading(
             instrument_class="STATION_PRECIP",
             expected_station_id="USW00094728",
             expected_bbox=None,
@@ -296,8 +356,12 @@ class TestSourceReadingValidation:
             product_status_policy="FINAL_ONLY",
             reading=reading,
         )
-        assert ok is False
-        assert reason == "wrong station_id"
+        assert row["usable"] is False
+        assert row["reason"] == "wrong station_id"
+        # A structurally-invalid reading still retains its raw-citation
+        # digest -- the evidence view can show what was actually looked at
+        # even for a reading that was ultimately refused.
+        assert row["digest"] is not None
 
     def test_timestamp_outside_window_unusable(self):
         window = _window()
@@ -308,8 +372,9 @@ class TestSourceReadingValidation:
             "value_native": 12.3,
             "unit": "mm",
             "product_status": "FINAL",
+            "raw": _raw_for(stationId="USW00094728", value=12.3, unit="mm"),
         }
-        ok, reason, converted = lib.validate_source_reading(
+        row = lib.validate_source_reading(
             instrument_class="STATION_PRECIP",
             expected_station_id="USW00094728",
             expected_bbox=None,
@@ -317,8 +382,8 @@ class TestSourceReadingValidation:
             product_status_policy="FINAL_ONLY",
             reading=reading,
         )
-        assert ok is False
-        assert reason == "timestamp outside window"
+        assert row["usable"] is False
+        assert row["reason"] == "timestamp outside window"
 
     def test_preliminary_blocked_by_final_only_policy(self):
         window = _window()
@@ -329,8 +394,9 @@ class TestSourceReadingValidation:
             "value_native": 12.3,
             "unit": "mm",
             "product_status": "PRELIMINARY",
+            "raw": _raw_for(stationId="USW00094728", value=12.3, unit="mm"),
         }
-        ok, reason, converted = lib.validate_source_reading(
+        row = lib.validate_source_reading(
             instrument_class="STATION_PRECIP",
             expected_station_id="USW00094728",
             expected_bbox=None,
@@ -338,8 +404,8 @@ class TestSourceReadingValidation:
             product_status_policy="FINAL_ONLY",
             reading=reading,
         )
-        assert ok is False
-        assert reason == "preliminary blocked by policy"
+        assert row["usable"] is False
+        assert row["reason"] == "preliminary blocked by policy"
 
     def test_preliminary_allowed_under_allow_preliminary_policy(self):
         window = _window()
@@ -350,8 +416,9 @@ class TestSourceReadingValidation:
             "value_native": 12.3,
             "unit": "mm",
             "product_status": "PRELIMINARY",
+            "raw": _raw_for(stationId="USW00094728", value=12.3, unit="mm"),
         }
-        ok, reason, converted = lib.validate_source_reading(
+        row = lib.validate_source_reading(
             instrument_class="STATION_PRECIP",
             expected_station_id="USW00094728",
             expected_bbox=None,
@@ -359,10 +426,10 @@ class TestSourceReadingValidation:
             product_status_policy="ALLOW_PRELIMINARY",
             reading=reading,
         )
-        assert ok is True
+        assert row["usable"] is True
 
     def test_missing_body_marked_unusable(self):
-        ok, reason, converted = lib.validate_source_reading(
+        row = lib.validate_source_reading(
             instrument_class="STATION_PRECIP",
             expected_station_id="USW00094728",
             expected_bbox=None,
@@ -370,9 +437,9 @@ class TestSourceReadingValidation:
             product_status_policy="FINAL_ONLY",
             reading={"usable": False, "reason": "non-200 response"},
         )
-        assert ok is False
-        assert reason == "non-200 response"
-        assert converted is None
+        assert row["usable"] is False
+        assert row["reason"] == "non-200 response"
+        assert row["converted"] is None
 
     def test_quake_outside_bbox_ignored(self):
         assert lib.quake_within_bbox(35.0, -115.0, [-120.0, 30.0, -110.0, 40.0]) is True
@@ -388,8 +455,9 @@ class TestSourceReadingValidation:
             "product_status": "FINAL",
             "lat": 55.0,  # outside the bbox below
             "lon": -115.0,
+            "raw": _raw_for(mag=5.5, lat=55.0, lon=-115.0),
         }
-        ok, reason, converted = lib.validate_source_reading(
+        row = lib.validate_source_reading(
             instrument_class="QUAKES",
             expected_station_id=None,
             expected_bbox=[-120.0, 30.0, -110.0, 40.0],
@@ -397,8 +465,8 @@ class TestSourceReadingValidation:
             product_status_policy="FINAL_ONLY",
             reading=reading,
         )
-        assert ok is False
-        assert reason == "epicenter outside bbox"
+        assert row["usable"] is False
+        assert row["reason"] == "epicenter outside bbox"
 
 
 # ---------------------------------------------------------------------------
@@ -416,6 +484,7 @@ def _envelope_sources(t_offset=100, station_id="USW00094728", value_a=12.3, valu
             "value_native": value_a,
             "unit": unit,
             "product_status": status,
+            "raw": _raw_for(stationId=station_id, value=value_a, unit=unit, pub="NWS_OBS"),
         },
         "GHCN_DAILY": {
             "usable": True,
@@ -424,8 +493,12 @@ def _envelope_sources(t_offset=100, station_id="USW00094728", value_a=12.3, valu
             "value_native": value_b,
             "unit": unit,
             "product_status": status,
+            "raw": _raw_for(stationId=station_id, value=value_b, unit=unit, pub="GHCN_DAILY"),
         },
     }
+
+
+LOCKED_PUBLISHERS = ("NWS_OBS", "GHCN_DAILY")
 
 
 class TestEvaluateEnvelope:
@@ -439,6 +512,8 @@ class TestEvaluateEnvelope:
             tolerance_scaled=lib.CLASS_DEFAULT_TOLERANCE["STATION_PRECIP"],
             threshold_scaled=10 * lib.VALUE_SCALE,
             cmp_op="gte",
+            event_id="1",
+            locked_publishers=LOCKED_PUBLISHERS,
         )
         base.update(overrides)
         return base
@@ -455,6 +530,63 @@ class TestEvaluateEnvelope:
         assert result["accepted"] is True
         assert result["verdict"] == "YES"
         assert result["code"] == "CLEAR"
+
+    def test_accepted_validated_sources_carry_full_provenance(self):
+        # The evidence view (frontend SourceRow / accepted_record.sources)
+        # needs the full per-source row, not just usable/reason/converted --
+        # this is what "align the contract and frontend record schema" means
+        # concretely: every field the view reads must actually be here.
+        sources = _envelope_sources(value_a=12.0, value_b=12.4)
+        envelope = {"event_id": "1", "sources": sources, "verdict": "YES", "code": "CLEAR"}
+        result = lib.evaluate_envelope(envelope=envelope, **self._kwargs())
+        assert result["accepted"] is True
+        row = result["validated_sources"]["NWS_OBS"]
+        for key in (
+            "usable", "reason", "converted", "station_id", "t",
+            "value_native", "unit", "product_status", "digest",
+        ):
+            assert key in row
+        assert row["station_id"] == "USW00094728"
+        assert row["digest"] == lib.stable_digest(sources["NWS_OBS"]["raw"])
+
+    def test_event_id_mismatch_rejected(self):
+        # A leader returning a structurally-perfect envelope for a DIFFERENT
+        # event (stale, copy-pasted, or hallucinated) must not be accepted
+        # just because its sources happen to validate on their own terms.
+        sources = _envelope_sources(value_a=12.0, value_b=12.4)
+        envelope = {"event_id": "999", "sources": sources, "verdict": "YES", "code": "CLEAR"}
+        result = lib.evaluate_envelope(envelope=envelope, **self._kwargs())
+        assert result["accepted"] is False
+        assert result["reject_reason"] == "event id mismatch"
+
+    def test_missing_event_id_rejected(self):
+        sources = _envelope_sources(value_a=12.0, value_b=12.4)
+        envelope = {"sources": sources, "verdict": "YES", "code": "CLEAR"}
+        result = lib.evaluate_envelope(envelope=envelope, **self._kwargs())
+        assert result["accepted"] is False
+        assert result["reject_reason"] == "event id mismatch"
+
+    def test_unauthorized_publisher_key_rejected(self):
+        # A source keyed by a publisher not in this event's locked
+        # constitution must not be allowed to count toward agreement, even
+        # if two OTHER, unauthorized sources agree with each other.
+        sources = _envelope_sources(value_a=12.0, value_b=12.4)
+        sources["NOT_A_REAL_PUBLISHER"] = sources.pop("GHCN_DAILY")
+        envelope = {"event_id": "1", "sources": sources, "verdict": "YES", "code": "CLEAR"}
+        result = lib.evaluate_envelope(envelope=envelope, **self._kwargs())
+        assert result["accepted"] is False
+        assert result["reject_reason"] == "unauthorized publisher key"
+
+    def test_extra_unauthorized_key_alongside_two_valid_ones_still_rejected(self):
+        # Even when the two LOCKED publishers genuinely agree, an envelope
+        # that also includes a third, unauthorized-key source is refused
+        # outright rather than having the extra key silently ignored.
+        sources = _envelope_sources(value_a=12.0, value_b=12.4)
+        sources["SOME_OTHER_SOURCE"] = dict(sources["NWS_OBS"])
+        envelope = {"event_id": "1", "sources": sources, "verdict": "YES", "code": "CLEAR"}
+        result = lib.evaluate_envelope(envelope=envelope, **self._kwargs())
+        assert result["accepted"] is False
+        assert result["reject_reason"] == "unauthorized publisher key"
 
     def test_two_publishers_agree_no(self):
         sources = _envelope_sources(value_a=5.0, value_b=5.2)  # below threshold of 10mm
@@ -691,6 +823,8 @@ class TestLyingLeaderDetection:
             tolerance_scaled=lib.CLASS_DEFAULT_TOLERANCE["STATION_PRECIP"],
             threshold_scaled=10 * lib.VALUE_SCALE,
             cmp_op="gte",
+            event_id="1",
+            locked_publishers=LOCKED_PUBLISHERS,
         )
         base.update(overrides)
         return base

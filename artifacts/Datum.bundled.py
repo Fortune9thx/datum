@@ -196,49 +196,56 @@ def convert_to_class_unit(instrument_class: str, value_native: float, unit: str)
         return round(value_native * multiplier * VALUE_SCALE)
     return None
 
-def validate_source_reading(*, instrument_class: str, expected_station_id: str | None, expected_bbox, window: tuple[int, int], product_status_policy: str, reading) -> tuple[bool, str | None, int | None]:
+def validate_source_reading(*, instrument_class: str, expected_station_id: str | None, expected_bbox, window: tuple[int, int], product_status_policy: str, reading) -> dict:
+
+    def _row(*, usable, reason=None, converted=None, digest=None):
+        return {'usable': usable, 'reason': reason, 'converted': converted, 'station_id': reading.get('station_id') if isinstance(reading, dict) else None, 't': reading.get('t') if isinstance(reading, dict) else None, 'value_native': reading.get('value_native') if isinstance(reading, dict) else None, 'unit': reading.get('unit') if isinstance(reading, dict) else None, 'product_status': reading.get('product_status') if isinstance(reading, dict) else None, 'digest': digest}
     if not isinstance(reading, dict):
-        return (False, 'malformed reading', None)
+        return _row(usable=False, reason='malformed reading')
     if reading.get('usable') is False:
         reason = reading.get('reason') or 'source reported unusable'
-        return (False, reason, None)
+        return _row(usable=False, reason=reason)
+    raw = reading.get('raw')
+    digest = stable_digest(raw) if isinstance(raw, str) and raw.strip() else None
+    if digest is None:
+        return _row(usable=False, reason='missing raw source citation')
     t = reading.get('t')
     if not isinstance(t, int):
-        return (False, 'missing timestamp', None)
+        return _row(usable=False, reason='missing timestamp', digest=digest)
     start, end = window
     if not start <= t < end:
-        return (False, 'timestamp outside window', None)
+        return _row(usable=False, reason='timestamp outside window', digest=digest)
     if instrument_class != 'QUAKES':
         station_id = reading.get('station_id')
         if not isinstance(station_id, str) or station_id.upper() != (expected_station_id or '').upper():
-            return (False, 'wrong station_id', None)
+            return _row(usable=False, reason='wrong station_id', digest=digest)
     else:
         lat = reading.get('lat')
         lon = reading.get('lon')
         if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
-            return (False, 'missing epicenter coordinates', None)
+            return _row(usable=False, reason='missing epicenter coordinates', digest=digest)
         if expected_bbox is not None and (not quake_within_bbox(float(lat), float(lon), expected_bbox)):
-            return (False, 'epicenter outside bbox', None)
+            return _row(usable=False, reason='epicenter outside bbox', digest=digest)
     product_status = reading.get('product_status')
     if product_status not in ('FINAL', 'PRELIMINARY'):
-        return (False, 'missing product status', None)
+        return _row(usable=False, reason='missing product status', digest=digest)
     if product_status_policy == 'FINAL_ONLY' and product_status != 'FINAL':
-        return (False, 'preliminary blocked by policy', None)
+        return _row(usable=False, reason='preliminary blocked by policy', digest=digest)
     unit = reading.get('unit')
     value_native = reading.get('value_native')
     if not isinstance(value_native, (int, float)) or not isinstance(unit, str):
-        return (False, 'malformed value', None)
+        return _row(usable=False, reason='malformed value', digest=digest)
     converted = convert_to_class_unit(instrument_class, float(value_native), unit)
     if converted is None:
-        return (False, 'unit mismatch', None)
-    return (True, None, converted)
+        return _row(usable=False, reason='unit mismatch', digest=digest)
+    return _row(usable=True, converted=converted, digest=digest)
 
 def quake_within_bbox(lat: float, lon: float, bbox) -> bool:
     min_lon, min_lat, max_lon, max_lat = bbox
     return min_lat <= lat <= max_lat and min_lon <= lon <= max_lon
 
 def aggregate_sources(*, tolerance_scaled: int, validated_sources: dict) -> tuple[str, str, int | None]:
-    usable = {pub: converted for pub, (ok, _reason, converted) in validated_sources.items() if ok}
+    usable = {pub: row['converted'] for pub, row in validated_sources.items() if row['usable']}
     if len(usable) < 2:
         return ('INCONCLUSIVE', 'MISSING', None)
     values = list(usable.values())
@@ -261,14 +268,18 @@ def apply_threshold(agreed_value_scaled: int | None, threshold_scaled: int, cmp_
         return agreed_value_scaled <= threshold_scaled
     raise ValueError('unknown comparator')
 
-def evaluate_envelope(*, instrument_class: str, expected_station_id: str | None, expected_bbox, window: tuple[int, int], product_status_policy: str, tolerance_scaled: int, threshold_scaled: int, cmp_op: str, envelope) -> dict:
+def evaluate_envelope(*, instrument_class: str, expected_station_id: str | None, expected_bbox, window: tuple[int, int], product_status_policy: str, tolerance_scaled: int, threshold_scaled: int, cmp_op: str, event_id: str, locked_publishers, envelope) -> dict:
     if not isinstance(envelope, dict):
         return _rejected('malformed envelope')
+    if envelope.get('event_id') != event_id:
+        return _rejected('event id mismatch')
     sources = envelope.get('sources')
     claimed_verdict = envelope.get('verdict')
     claimed_code = envelope.get('code')
     if not isinstance(sources, dict) or len(sources) < 2:
         return _rejected('malformed sources')
+    if not set(sources.keys()) <= set(locked_publishers):
+        return _rejected('unauthorized publisher key')
     if claimed_verdict not in VALID_VERDICTS or claimed_code not in VALID_CODES:
         return _rejected('malformed verdict/code')
     validated = {}
@@ -280,7 +291,7 @@ def evaluate_envelope(*, instrument_class: str, expected_station_id: str | None,
     else:
         derived_verdict = 'INCONCLUSIVE'
     if derived_code == 'MISSING':
-        reasons = {reason for ok, reason, _ in validated.values() if not ok}
+        reasons = {row['reason'] for row in validated.values() if not row['usable']}
         if reasons and reasons <= {'preliminary blocked by policy'}:
             derived_code = 'PRELIMINARY_BLOCKED'
     if claimed_verdict != derived_verdict or claimed_code != derived_code:
@@ -324,12 +335,12 @@ def _adjudication_prompt(*, instrument_class, station_id, bbox, depth, window, p
     else:
         subject = f'official station id {station_id}'
     if is_quakes:
-        source_shape = '{"usable": true|false, "station_id": "...", "t": <unix int>, "value_native": <number>, "unit": "...", "product_status": "FINAL"|"PRELIMINARY", "converted": <number>, "reason": null|"...", "lat": <number>, "lon": <number>}}, '
+        source_shape = '{"usable": true|false, "station_id": "...", "t": <unix int>, "value_native": <number>, "unit": "...", "product_status": "FINAL"|"PRELIMINARY", "converted": <number>, "reason": null|"...", "raw": "...", "lat": <number>, "lon": <number>}}, '
         depth_instruction = ' Include each source\'s epicenter as "lat" and "lon" (decimal degrees, WGS84) so membership inside the locked bbox can be checked.'
     else:
-        source_shape = '{"usable": true|false, "station_id": "...", "t": <unix int>, "value_native": <number>, "unit": "...", "product_status": "FINAL"|"PRELIMINARY", "converted": <number>, "reason": null|"..."}}, '
+        source_shape = '{"usable": true|false, "station_id": "...", "t": <unix int>, "value_native": <number>, "unit": "...", "product_status": "FINAL"|"PRELIMINARY", "converted": <number>, "reason": null|"...", "raw": "..."}}, '
         depth_instruction = ''
-    return f'You are retrieving OFFICIAL, COMPLETED (never forecast) observation data for instrument class {instrument_class} at {subject}, for the locked window [{window[0]}, {window[1]}) (Unix chain time), from ONLY these locked publishers: {publishers}. Product status policy: {policy}.{depth_instruction}\n\nReturn ONLY a single JSON object with this exact shape (no prose):\n{{"event_id": "' + str(event_id) + '", "sources": {"<publisher>": ' + source_shape + '"verdict": "YES"|"NO"|"INCONCLUSIVE", "code": "CLEAR"|"MISSING"|"CONFLICT"|"PRELIMINARY_BLOCKED"}\n\nIf a publisher\'s page is unreachable, wrong station, outside the window, a forecast product, or PRELIMINARY under a FINAL_ONLY policy, set that source\'s usable=false with a reason string and never impute a value. This proposed verdict/code is advisory only -- the caller re-derives and validates it independently.'
+    return f'You are retrieving OFFICIAL, COMPLETED (never forecast) observation data for instrument class {instrument_class} at {subject}, for the locked window [{window[0]}, {window[1]}) (Unix chain time), from ONLY these locked publishers: {publishers}. Product status policy: {policy}.{depth_instruction}\n\nReturn ONLY a single JSON object with this exact shape (no prose):\n{{"event_id": "' + str(event_id) + '", "sources": {"<publisher>": ' + source_shape + '"verdict": "YES"|"NO"|"INCONCLUSIVE", "code": "CLEAR"|"MISSING"|"CONFLICT"|"PRELIMINARY_BLOCKED"}\n\nIf a publisher\'s page is unreachable, wrong station, outside the window, a forecast product, or PRELIMINARY under a FINAL_ONLY policy, set that source\'s usable=false with a reason string and never impute a value. When usable is true, "raw" MUST be the verbatim response text or JSON body you actually read from that publisher -- not a re-summary of the fields above, and never fabricated. A usable source with no genuine raw citation will be rejected: it cannot be authenticated as real observation data. This proposed verdict/code is advisory only -- the caller re-derives and validates it independently.'
 
 def _now_ts() -> int:
     return int(datetime.now(timezone.utc).timestamp())
@@ -524,8 +535,8 @@ class Datum(gl.contract.Contract):
                 my_envelope = json.loads(str(my_raw))
             except (json.JSONDecodeError, TypeError):
                 return False
-            leader_eval = evaluate_envelope(instrument_class=instrument_class, expected_station_id=station_id, expected_bbox=bbox, window=window, product_status_policy=policy, tolerance_scaled=rec['tolerance'], threshold_scaled=rec['threshold'], cmp_op=rec['cmp'], envelope=leader_envelope)
-            my_eval = evaluate_envelope(instrument_class=instrument_class, expected_station_id=station_id, expected_bbox=bbox, window=window, product_status_policy=policy, tolerance_scaled=rec['tolerance'], threshold_scaled=rec['threshold'], cmp_op=rec['cmp'], envelope=my_envelope)
+            leader_eval = evaluate_envelope(instrument_class=instrument_class, expected_station_id=station_id, expected_bbox=bbox, window=window, product_status_policy=policy, tolerance_scaled=rec['tolerance'], threshold_scaled=rec['threshold'], cmp_op=rec['cmp'], event_id=event_id_local, locked_publishers=publishers, envelope=leader_envelope)
+            my_eval = evaluate_envelope(instrument_class=instrument_class, expected_station_id=station_id, expected_bbox=bbox, window=window, product_status_policy=policy, tolerance_scaled=rec['tolerance'], threshold_scaled=rec['threshold'], cmp_op=rec['cmp'], event_id=event_id_local, locked_publishers=publishers, envelope=my_envelope)
             if not leader_eval['accepted'] or not my_eval['accepted']:
                 return False
             return leader_eval['verdict'] == my_eval['verdict'] and leader_eval['code'] == my_eval['code'] and (leader_eval['agreed_value'] == my_eval['agreed_value'])
@@ -534,7 +545,7 @@ class Datum(gl.contract.Contract):
             envelope = json.loads(str(raw_envelope))
         except (json.JSONDecodeError, TypeError):
             envelope = {}
-        evaluation = evaluate_envelope(instrument_class=instrument_class, expected_station_id=station_id, expected_bbox=bbox, window=window, product_status_policy=policy, tolerance_scaled=rec['tolerance'], threshold_scaled=rec['threshold'], cmp_op=rec['cmp'], envelope=envelope)
+        evaluation = evaluate_envelope(instrument_class=instrument_class, expected_station_id=station_id, expected_bbox=bbox, window=window, product_status_policy=policy, tolerance_scaled=rec['tolerance'], threshold_scaled=rec['threshold'], cmp_op=rec['cmp'], event_id=event_id_local, locked_publishers=publishers, envelope=envelope)
         if not evaluation['accepted']:
             self._credit(adjudicator, ADJUDICATE_BOND)
             rec['last_state_change_at'] = _now_ts()
@@ -543,7 +554,7 @@ class Datum(gl.contract.Contract):
         rec['verdict'] = evaluation['verdict']
         rec['code'] = evaluation['code']
         rec['agreed_value'] = evaluation['agreed_value']
-        rec['accepted_record'] = {pub: {'usable': ok, 'reason': reason, 'converted': converted} for pub, (ok, reason, converted) in evaluation['validated_sources'].items()}
+        rec['accepted_record'] = {'sources': evaluation['validated_sources']}
         rec['adjudicate_bond_payer'] = adjudicator
         rec['adjudicate_bond'] = ADJUDICATE_BOND
         rec['state'] = 'VERDICT_PENDING'

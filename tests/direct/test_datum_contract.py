@@ -214,6 +214,159 @@ class TestAdjudicateBeforeCloseRejected:
             contract.adjudicate(event_id=event_id)
 
 
+class TestAdjudicationSourceBindingAndProvenance:
+    """A steward review requested that adjudication bind the leader's
+    envelope to the locked constitution (reject an envelope for the wrong
+    event, or one keyed by a publisher this event never authorized) and
+    retain the provenance fields the frontend's evidence view actually
+    reads. This covers both bindings end to end against a real deploy, not
+    just at the datum_lib pure-function level."""
+
+    def _create_accept(self, contract, direct_vm, direct_alice, direct_bob):
+        with direct_vm.prank(direct_alice):
+            direct_vm.value = STAKE + CREATE_BOND
+            event_id = contract.create_event(
+                constitution_json=_precip_constitution(), side="YES", stake=str(STAKE)
+            )
+        with direct_vm.prank(direct_bob):
+            direct_vm.value = STAKE
+            contract.accept_event(event_id=event_id, side="NO")
+        return event_id
+
+    def test_accepted_record_carries_full_provenance_per_source(
+        self, contract, direct_vm, direct_alice, direct_bob
+    ):
+        event_id = self._create_accept(contract, direct_vm, direct_alice, direct_bob)
+        direct_vm.mock_llm(
+            r".*",
+            json.dumps(
+                {
+                    "event_id": event_id,
+                    "sources": {
+                        "NWS_OBS": {
+                            "usable": True,
+                            "station_id": "USW00094728",
+                            "t": NOW_PLACEHOLDER + 3 * 3600 + 100,
+                            "value_native": 12,
+                            "unit": "mm",
+                            "product_status": "FINAL",
+                            "reason": None,
+                            "raw": '{"stationId": "USW00094728", "value": 12, "unit": "mm"}',
+                        },
+                        "GHCN_DAILY": {
+                            "usable": True,
+                            "station_id": "USW00094728",
+                            "t": NOW_PLACEHOLDER + 3 * 3600 + 200,
+                            "value_native": 13,
+                            "unit": "mm",
+                            "product_status": "FINAL",
+                            "reason": None,
+                            "raw": '{"stationId": "USW00094728", "value": 13, "unit": "mm"}',
+                        },
+                    },
+                    "verdict": "YES",
+                    "code": "CLEAR",
+                }
+            ),
+        )
+        direct_vm.warp("2027-01-15T18:00:00Z")
+        with direct_vm.prank(direct_alice):
+            direct_vm.value = ADJUDICATE_BOND
+            contract.adjudicate(event_id=event_id)
+
+        record = json.loads(contract.get_record(event_id=event_id))
+        sources = record["accepted_record"]["sources"]
+        row = sources["NWS_OBS"]
+        for key in (
+            "usable", "reason", "converted", "station_id", "t",
+            "value_native", "unit", "product_status", "digest",
+        ):
+            assert key in row
+        assert row["usable"] is True
+        assert row["station_id"] == "USW00094728"
+        assert row["converted"] == 1200
+        assert row["digest"]  # real provenance, not just a pass/fail flag
+
+    def test_event_id_mismatch_in_envelope_rejected_not_crashed(
+        self, contract, direct_vm, direct_alice, direct_bob
+    ):
+        event_id = self._create_accept(contract, direct_vm, direct_alice, direct_bob)
+        direct_vm.mock_llm(
+            r".*",
+            json.dumps(
+                {
+                    "event_id": "999999999999",  # not this event
+                    "sources": {
+                        "NWS_OBS": {
+                            "usable": True, "station_id": "USW00094728",
+                            "t": NOW_PLACEHOLDER + 3 * 3600 + 100,
+                            "value_native": 12, "unit": "mm",
+                            "product_status": "FINAL", "raw": "x",
+                        },
+                        "GHCN_DAILY": {
+                            "usable": True, "station_id": "USW00094728",
+                            "t": NOW_PLACEHOLDER + 3 * 3600 + 200,
+                            "value_native": 13, "unit": "mm",
+                            "product_status": "FINAL", "raw": "y",
+                        },
+                    },
+                    "verdict": "YES",
+                    "code": "CLEAR",
+                }
+            ),
+        )
+        direct_vm.warp("2027-01-15T18:00:00Z")
+        with direct_vm.prank(direct_alice):
+            direct_vm.value = ADJUDICATE_BOND
+            result = contract.adjudicate(event_id=event_id)
+        assert result == "REJECTED"
+
+        event = json.loads(contract.get_event(event_id=event_id))
+        assert event["state"] == "ACTIVE"  # never advanced to VERDICT_PENDING
+
+        alice_claimable = json.loads(
+            contract.get_claimable(address=str(direct_alice), cursor=0, limit=1)
+        )
+        assert int(alice_claimable["claimable"]) == ADJUDICATE_BOND  # bond returned, not stranded
+
+    def test_unauthorized_publisher_key_in_envelope_rejected_not_crashed(
+        self, contract, direct_vm, direct_alice, direct_bob
+    ):
+        event_id = self._create_accept(contract, direct_vm, direct_alice, direct_bob)
+        direct_vm.mock_llm(
+            r".*",
+            json.dumps(
+                {
+                    "event_id": event_id,
+                    "sources": {
+                        "NWS_OBS": {
+                            "usable": True, "station_id": "USW00094728",
+                            "t": NOW_PLACEHOLDER + 3 * 3600 + 100,
+                            "value_native": 12, "unit": "mm",
+                            "product_status": "FINAL", "raw": "x",
+                        },
+                        "NOT_A_REAL_PUBLISHER": {
+                            "usable": True, "station_id": "USW00094728",
+                            "t": NOW_PLACEHOLDER + 3 * 3600 + 200,
+                            "value_native": 13, "unit": "mm",
+                            "product_status": "FINAL", "raw": "y",
+                        },
+                    },
+                    "verdict": "YES",
+                    "code": "CLEAR",
+                }
+            ),
+        )
+        direct_vm.warp("2027-01-15T18:00:00Z")
+        with direct_vm.prank(direct_alice):
+            direct_vm.value = ADJUDICATE_BOND
+            result = contract.adjudicate(event_id=event_id)
+        assert result == "REJECTED"
+
+        event = json.loads(contract.get_event(event_id=event_id))
+        assert event["state"] == "ACTIVE"
+
+
 class TestAppealBondResolution:
     """Regression coverage for a fund-stranding path: _settle() (called
     from finalize()) must read and clear rec["appeal"], or an appeal bond
@@ -241,6 +394,7 @@ class TestAppealBondResolution:
                         "product_status": "FINAL",
                         "converted": 1200,
                         "reason": None,
+                        "raw": '{"stationId": "USW00094728", "value": 12, "unit": "mm"}',
                     },
                     "GHCN_DAILY": {
                         "usable": True,
@@ -251,6 +405,7 @@ class TestAppealBondResolution:
                         "product_status": "FINAL",
                         "converted": 1300,
                         "reason": None,
+                        "raw": '{"stationId": "USW00094728", "value": 13, "unit": "mm"}',
                     },
                 },
                 "verdict": "YES",
@@ -504,6 +659,7 @@ def _clear_envelope_for(event_id):
                     "product_status": "FINAL",
                     "converted": 1200,
                     "reason": None,
+                    "raw": '{"stationId": "USW00094728", "value": 12, "unit": "mm"}',
                 },
                 "GHCN_DAILY": {
                     "usable": True,
@@ -514,6 +670,7 @@ def _clear_envelope_for(event_id):
                     "product_status": "FINAL",
                     "converted": 1300,
                     "reason": None,
+                    "raw": '{"stationId": "USW00094728", "value": 13, "unit": "mm"}',
                 },
             },
             "verdict": "YES",

@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.4.0] - 2026-09-26
+
+### Fixed
+
+- `evaluate_envelope` never checked the leader's claimed `event_id` against the event actually being adjudicated, and never checked that `sources` keys were among the event's own locked publishers -- a stale, hallucinated, or wrongly-keyed envelope could be accepted as long as its self-consistency checks passed. Both are now checked before anything else, and either mismatch refuses the whole envelope.
+- Adjudication accepted a source reading with no citation of where it came from. Every usable source must now carry a verbatim `raw` field; a `stable_digest` of it is computed and retained. A usable source with no raw citation is refused.
+- `accepted_record` only stored `{usable, reason, converted}` per source, discarding `station_id`/`t`/`value_native`/`unit`/`product_status`/`digest` -- fields the frontend's evidence view already expected and was reading from a `.sources` key that didn't exist in the stored shape at all, so the evidence pane silently rendered nothing regardless of what adjudication actually did. The full row is now retained under `accepted_record.sources`, matching the frontend exactly.
+- `get_position`/`get_positions`/`get_claimable`/`get_activity` used a caller-supplied address string directly as a lookup key or comparison value, while every write path stores addresses via `Address(...).as_hex`. A differently-cased query (e.g. non-checksummed) would silently read back empty/zero. The constructor's `treasury` argument had the same gap. All five now normalize through `Address(...).as_hex`.
+
+### Added
+
+- Tests covering event-id binding, publisher-key binding, and the full provenance schema, at both the `datum_lib` and gltest-integration level: `contracts/ProbeTreasury.py` is unrelated to this entry (a deploy-diagnostic contract, see docs/deployment.md); the new coverage here is `TestEvaluateEnvelope`'s binding/provenance tests and `TestAdjudicationSourceBindingAndProvenance` in `test_datum_contract.py`.
+
 ## [1.3.0] - 2026-09-25
 
 ### Added

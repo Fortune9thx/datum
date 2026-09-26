@@ -95,6 +95,22 @@ model's own claimed evidence" question has one factual answer: no --
 every accepted record reflects two independently-executed prompt calls
 that agreed, not one call trusted at face value.
 
+`evaluate_envelope` also binds the envelope to the locked constitution
+before anything else is checked: it refuses outright if the envelope's
+`event_id` doesn't match the event actually being adjudicated (a stale or
+hallucinated envelope for a different event), and if any key in `sources`
+isn't one of this event's own locked `publishers` (an unauthorized
+publisher never counts toward the two-source agreement requirement, and
+is never silently dropped -- the whole envelope is refused). Every usable
+source must also carry a verbatim `raw` citation; `validate_source_reading`
+computes `stable_digest(raw)` from it and retains that digest in the
+accepted record, so the evidence view can show what was actually looked
+at. A usable source with no raw citation is refused as unauthenticated.
+This is retained evidence and a structural discipline, not a proof that
+the citation was genuinely fetched rather than paraphrased -- the actual
+defense against a fabricated reading remains the independent second
+fetch above, not the raw field on its own.
+
 ## Why `run_nondet` and not `strict_eq`
 
 `gl.eq_principle.strict_eq`'s validator path cannot be exercised in

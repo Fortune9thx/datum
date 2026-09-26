@@ -436,34 +436,66 @@ def validate_source_reading(
     window: tuple[int, int],
     product_status_policy: str,
     reading,
-) -> tuple[bool, str | None, int | None]:
+) -> dict:
     """Validates one publisher's reading object against the locked
-    constitution. Returns (usable, reason_code_or_None, converted_scaled_or_None).
+    constitution and returns the full provenance row the evidence view
+    needs -- never a bare (usable, reason, converted) triple, since the
+    accepted record must retain enough of the reading to actually show what
+    was checked, not just whether it passed.
 
     `reading` is the structured object the model returned for one source
     (untyped on purpose -- it is caller-supplied JSON, and the isinstance
     guard below is real defensive runtime code):
     {"usable": bool, "station_id": str, "t": int, "value_native": number,
      "unit": str, "product_status": str, "converted": number, "reason": str|None,
-     "lat": number, "lon": number}  (lat/lon required only for QUAKES)
+     "raw": str, "lat": number, "lon": number}  (lat/lon required only for
+    QUAKES; "raw" is the verbatim source response text the model read --
+    required for every source, usable or not, since a reading with no raw
+    citation cannot be authenticated at all)
+
+    Returns {"usable": bool, "reason": str|None, "converted": int|None,
+    "station_id": str|None, "t": int|None, "value_native": number|None,
+    "unit": str|None, "product_status": str|None, "digest": str|None}.
+    "digest" is stable_digest(raw) -- present whenever a raw citation was
+    given, even if the reading was ultimately ruled unusable for some other
+    reason, so the evidence view can still show what was actually looked at.
     """
+
+    def _row(*, usable, reason=None, converted=None, digest=None):
+        return {
+            "usable": usable,
+            "reason": reason,
+            "converted": converted,
+            "station_id": reading.get("station_id") if isinstance(reading, dict) else None,
+            "t": reading.get("t") if isinstance(reading, dict) else None,
+            "value_native": reading.get("value_native") if isinstance(reading, dict) else None,
+            "unit": reading.get("unit") if isinstance(reading, dict) else None,
+            "product_status": reading.get("product_status") if isinstance(reading, dict) else None,
+            "digest": digest,
+        }
+
     if not isinstance(reading, dict):
-        return False, "malformed reading", None
+        return _row(usable=False, reason="malformed reading")
     if reading.get("usable") is False:
         reason = reading.get("reason") or "source reported unusable"
-        return False, reason, None
+        return _row(usable=False, reason=reason)
+
+    raw = reading.get("raw")
+    digest = stable_digest(raw) if isinstance(raw, str) and raw.strip() else None
+    if digest is None:
+        return _row(usable=False, reason="missing raw source citation")
 
     t = reading.get("t")
     if not isinstance(t, int):
-        return False, "missing timestamp", None
+        return _row(usable=False, reason="missing timestamp", digest=digest)
     start, end = window
     if not (start <= t < end):
-        return False, "timestamp outside window", None
+        return _row(usable=False, reason="timestamp outside window", digest=digest)
 
     if instrument_class != "QUAKES":
         station_id = reading.get("station_id")
         if not isinstance(station_id, str) or station_id.upper() != (expected_station_id or "").upper():
-            return False, "wrong station_id", None
+            return _row(usable=False, reason="wrong station_id", digest=digest)
     else:
         # QUAKES has no per-source station id -- membership is checked
         # against the locked bbox instead. A source claiming an epicenter
@@ -471,26 +503,26 @@ def validate_source_reading(
         lat = reading.get("lat")
         lon = reading.get("lon")
         if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
-            return False, "missing epicenter coordinates", None
+            return _row(usable=False, reason="missing epicenter coordinates", digest=digest)
         if expected_bbox is not None and not quake_within_bbox(float(lat), float(lon), expected_bbox):
-            return False, "epicenter outside bbox", None
+            return _row(usable=False, reason="epicenter outside bbox", digest=digest)
 
     product_status = reading.get("product_status")
     if product_status not in ("FINAL", "PRELIMINARY"):
-        return False, "missing product status", None
+        return _row(usable=False, reason="missing product status", digest=digest)
     if product_status_policy == "FINAL_ONLY" and product_status != "FINAL":
-        return False, "preliminary blocked by policy", None
+        return _row(usable=False, reason="preliminary blocked by policy", digest=digest)
 
     unit = reading.get("unit")
     value_native = reading.get("value_native")
     if not isinstance(value_native, (int, float)) or not isinstance(unit, str):
-        return False, "malformed value", None
+        return _row(usable=False, reason="malformed value", digest=digest)
 
     converted = convert_to_class_unit(instrument_class, float(value_native), unit)
     if converted is None:
-        return False, "unit mismatch", None
+        return _row(usable=False, reason="unit mismatch", digest=digest)
 
-    return True, None, converted
+    return _row(usable=True, converted=converted, digest=digest)
 
 
 def quake_within_bbox(lat: float, lon: float, bbox) -> bool:
@@ -506,16 +538,17 @@ def quake_within_bbox(lat: float, lon: float, bbox) -> bool:
 def aggregate_sources(
     *, tolerance_scaled: int, validated_sources: dict
 ) -> tuple[str, str, int | None]:
-    """validated_sources: {publisher_id: (usable, reason, converted_scaled)}.
+    """validated_sources: {publisher_id: row} where row is the dict returned
+    by validate_source_reading() (must have "usable"/"converted" keys).
 
     Returns (verdict_code_placeholder, code, agreed_value_scaled_or_None)
     where code is one of VALID_CODES. verdict itself (YES/NO) is computed
     separately once a threshold/cmp is applied to agreed_value.
     """
     usable = {
-        pub: converted
-        for pub, (ok, _reason, converted) in validated_sources.items()
-        if ok
+        pub: row["converted"]
+        for pub, row in validated_sources.items()
+        if row["usable"]
     }
     if len(usable) < 2:
         return "INCONCLUSIVE", "MISSING", None
@@ -553,6 +586,8 @@ def evaluate_envelope(
     tolerance_scaled: int,
     threshold_scaled: int,
     cmp_op: str,
+    event_id: str,
+    locked_publishers,
     envelope,
 ) -> dict:
     """Full code-side acceptance of a leader-proposed JSON envelope.
@@ -562,6 +597,17 @@ def evaluate_envelope(
     accepts the envelope if the leader's claimed verdict/code MATCHES the
     independently-derived one. On any mismatch or malformed envelope, the
     whole envelope is rejected (accepted=False) and no pools move.
+
+    Two additional bindings against the locked constitution, both enforced
+    at the whole-envelope level (not per-source), since either one failing
+    means the envelope cannot be trusted at all: the envelope must claim the
+    SAME event_id this adjudication is actually for (a leader returning an
+    envelope for a different event, stale or otherwise, is rejected outright
+    rather than silently accepted because its sources happen to validate),
+    and every key in envelope["sources"] must be one of this event's own
+    locked `publishers` (a source keyed by any other id is refused, never
+    silently dropped and never allowed to count toward the two-source
+    agreement requirement).
 
     `envelope` is intentionally left untyped (not `dict`): it is the raw,
     untrusted structure decoded from the leader's own JSON output, so the
@@ -573,10 +619,14 @@ def evaluate_envelope(
       "code": one of VALID_CODES,
       "agreed_value": int|None,
       "reject_reason": str|None,
+      "validated_sources": {publisher_id: row},
     }
     """
     if not isinstance(envelope, dict):
         return _rejected("malformed envelope")
+
+    if envelope.get("event_id") != event_id:
+        return _rejected("event id mismatch")
 
     sources = envelope.get("sources")
     claimed_verdict = envelope.get("verdict")
@@ -584,6 +634,10 @@ def evaluate_envelope(
 
     if not isinstance(sources, dict) or len(sources) < 2:
         return _rejected("malformed sources")
+
+    if not set(sources.keys()) <= set(locked_publishers):
+        return _rejected("unauthorized publisher key")
+
     if claimed_verdict not in VALID_VERDICTS or claimed_code not in VALID_CODES:
         return _rejected("malformed verdict/code")
 
@@ -612,7 +666,7 @@ def evaluate_envelope(
     # reason was exactly the preliminary-policy rejection, prefer that code
     # for clearer UX, still INCONCLUSIVE/MISSING-equivalent for money paths.
     if derived_code == "MISSING":
-        reasons = {reason for ok, reason, _ in validated.values() if not ok}
+        reasons = {row["reason"] for row in validated.values() if not row["usable"]}
         if reasons and reasons <= {"preliminary blocked by policy"}:
             derived_code = "PRELIMINARY_BLOCKED"
 
@@ -727,7 +781,7 @@ def _adjudication_prompt(
             '{"usable": true|false, "station_id": "...", "t": <unix int>, '
             '"value_native": <number>, "unit": "...", "product_status": '
             '"FINAL"|"PRELIMINARY", "converted": <number>, "reason": null|"...", '
-            '"lat": <number>, "lon": <number>}}, '
+            '"raw": "...", "lat": <number>, "lon": <number>}}, '
         )
         depth_instruction = (
             ' Include each source\'s epicenter as "lat" and "lon" (decimal '
@@ -738,7 +792,8 @@ def _adjudication_prompt(
         source_shape = (
             '{"usable": true|false, "station_id": "...", "t": <unix int>, '
             '"value_native": <number>, "unit": "...", "product_status": '
-            '"FINAL"|"PRELIMINARY", "converted": <number>, "reason": null|"..."}}, '
+            '"FINAL"|"PRELIMINARY", "converted": <number>, "reason": null|"...", '
+            '"raw": "..."}}, '
         )
         depth_instruction = ""
 
@@ -756,7 +811,12 @@ def _adjudication_prompt(
         "If a publisher's page is unreachable, wrong station, outside the "
         "window, a forecast product, or PRELIMINARY under a FINAL_ONLY "
         "policy, set that source's usable=false with a reason string and "
-        "never impute a value. This proposed verdict/code is advisory only "
-        "-- the caller re-derives and validates it independently."
+        "never impute a value. When usable is true, \"raw\" MUST be the "
+        "verbatim response text or JSON body you actually read from that "
+        "publisher -- not a re-summary of the fields above, and never "
+        "fabricated. A usable source with no genuine raw citation will be "
+        "rejected: it cannot be authenticated as real observation data. "
+        "This proposed verdict/code is advisory only -- the caller "
+        "re-derives and validates it independently."
     )
 

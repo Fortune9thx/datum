@@ -356,6 +356,8 @@ class Datum(gl.contract.Contract):
                 tolerance_scaled=rec["tolerance"],
                 threshold_scaled=rec["threshold"],
                 cmp_op=rec["cmp"],
+                event_id=event_id_local,
+                locked_publishers=publishers,
                 envelope=leader_envelope,
             )
             my_eval = evaluate_envelope(
@@ -367,6 +369,8 @@ class Datum(gl.contract.Contract):
                 tolerance_scaled=rec["tolerance"],
                 threshold_scaled=rec["threshold"],
                 cmp_op=rec["cmp"],
+                event_id=event_id_local,
+                locked_publishers=publishers,
                 envelope=my_envelope,
             )
             if not leader_eval["accepted"] or not my_eval["accepted"]:
@@ -393,6 +397,8 @@ class Datum(gl.contract.Contract):
             tolerance_scaled=rec["tolerance"],
             threshold_scaled=rec["threshold"],
             cmp_op=rec["cmp"],
+            event_id=event_id_local,
+            locked_publishers=publishers,
             envelope=envelope,
         )
 
@@ -408,10 +414,7 @@ class Datum(gl.contract.Contract):
         rec["verdict"] = evaluation["verdict"]
         rec["code"] = evaluation["code"]
         rec["agreed_value"] = evaluation["agreed_value"]
-        rec["accepted_record"] = {
-            pub: {"usable": ok, "reason": reason, "converted": converted}
-            for pub, (ok, reason, converted) in evaluation["validated_sources"].items()
-        }
+        rec["accepted_record"] = {"sources": evaluation["validated_sources"]}
         rec["adjudicate_bond_payer"] = adjudicator
         rec["adjudicate_bond"] = ADJUDICATE_BOND
         rec["state"] = "VERDICT_PENDING"
