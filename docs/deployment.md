@@ -10,9 +10,27 @@
 | Explorer | https://explorer-studio-dev.genlayer.com/address/0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3 |
 | Treasury | `0xC6E6d3b2acCaECeCeB40Ad4bD3dF123DDCB4e537` |
 
-Machine-readable record: [`deploy/deployments.json`](../deploy/deployments.json). Its `bundleSha256` must match `sha256(artifacts/Datum.bundled.py)`.
+Machine-readable record: [`deploy/deployments.json`](../deploy/deployments.json). Its `bundleSha256` must match `sha256(artifacts/Datum.bundled.py)` — as of the redeploy blocker below, it currently does **not**; see that section before assuming the two are in sync.
 
 Studio Next is a development preview and resets periodically. If the contract address stops resolving, it was reset — redeploy with the command below and update `deploy/deployments.json` and the `NEXT_PUBLIC_DATUM_CONTRACT_ADDRESS` environment variable.
+
+## Known issue: redeploy currently blocked (hosted `__init__` execution)
+
+A source change added `Address(treasury).as_hex` normalization to the constructor (closing a checksum-case bug in `get_position`/`get_positions`/`get_claimable`/`get_activity` — see `docs/audit.md`). That change is committed and passes every local check, but it has not been possible to ship it to a live contract: three consecutive deploy attempts on Studio Next failed with `FINISHED_WITH_ERROR` (transaction `ACCEPTED`, constructor execution reverted):
+
+- `0x98bcbc8c455f66792ffbbfd7093932e990b3b93c84845a2626aa951450b8cc19` — full DATUM bundle, explicit `--fee-value`.
+- `0xd1801f67d2db6653574c4df6f1be00237eaec9f442fb1d8ae8a4e9c5fd8de146` — full DATUM bundle, `--fee-value` omitted (CLI auto-derived).
+- `0x7d39c9105005dd7d00f6ff87e9328054987f3bedd4b58eb005293dde2b0829b3` — a minimal 20-line isolation contract (`contracts/ProbeTreasury.py`), same pinned dependency hash, whose entire constructor is `self.treasury = Address(treasury).as_hex` and nothing else.
+
+The third result is the important one: it rules out anything specific to DATUM's size or structure. Ruled out directly:
+
+- **Fee/gas budget** — identical failure with and without an explicit `--fee-value`.
+- **A logic bug in the change itself** — the exact same bundle, treasury argument, and pinned SDK version (`v0.6.0-rc6`) deploy and execute correctly in a local `gltest` reproduction (`__init__`, `get_config()`, and `get_claimable()` all succeed).
+- **A WASM-sandbox portability gap** — the real SDK's `Address.as_hex`/`Keccak256` implementation is pure Python with no native dependencies, so there's no reason it would behave differently in the hosted sandbox than locally.
+
+Studio Next's debug-trace RPC (`gen_dbg_traceTransaction`) returns `Method not found` on the hosted API, so no traceback is retrievable for any of the three failures. The working conclusion — not a proven root cause, the best-supported explanation after ruling out the above — is that the hosted runner for this pinned dependency hash currently behaves differently from the local cached SDK build for at least this constructor pattern. `genlayer-studio`'s GitHub issues have several other open, unrelated infrastructure-correctness reports filed in the same window (e.g. #1757, #1761, #1767–#1769), consistent with broader instability rather than a DATUM-specific regression, though none matches this exact symptom.
+
+**Decision:** stop spending GEN on further blind retries. The live contract at `0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3` (see above) is unaffected and keeps running the pre-fix code — the frontend continues pointing at it. The checksum fix stays committed in source (`contracts/Datum.py`, `artifacts/Datum.bundled.py`) and will ship on the next redeploy attempt, once this clears. If retrying: try again after a delay (this network's infra issues have historically been transient), and if it fails identically again, file a `genlayer-studio` issue with this exact reproduction — the existing open issues don't cover it.
 
 ## Verifying a deployment is live
 

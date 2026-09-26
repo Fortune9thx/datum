@@ -15,5 +15,5 @@
   "bundleSha256": "5a393685ae163d99bd0f20385627da09f030df8627eb4b5e2854043a9149e72b",
   "deployedAt": "2026-09-25T13:52:00Z",
   "note": "Studio Next is a development preview and is periodically reset. If this address stops resolving via gen_getContractSchema, it was reset -- redeploy and update this file.",
-  "driftWarning": "As of the source change that added Address() checksum normalization to get_position/get_positions/get_claimable/get_activity and the constructor's treasury argument, the CURRENT bundleSha256 above no longer matches artifacts/Datum.bundled.py -- this deployment predates that fix. Redeploy and update this whole file before relying on those four view methods returning correct results for a non-checksummed address input."
+  "driftWarning": "As of the source change that added Address() checksum normalization to get_position/get_positions/get_claimable/get_activity and the constructor's treasury argument, the CURRENT bundleSha256 above no longer matches artifacts/Datum.bundled.py -- this deployment predates that fix. Redeploy is currently blocked on the hosted network, not merely undone -- see the 'Known issue: redeploy currently blocked' section in docs/deployment.md for the three failed transaction hashes and why this isn't believed to be a code bug. Redeploy and update this whole file once that clears."
 }
