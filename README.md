@@ -101,10 +101,11 @@ PYTHONIOENCODING=utf-8 genvm-lint check artifacts/Datum.bundled.py
 python -m pytest tests/direct/test_datum_contract.py -q
 # 33 passed
 
-# Frontend: renders the real ticket page against a fixture record, proving
-# the evidence display (not just the contract-side record shape) is correct:
+# Frontend: renders the real ticket page against a fixture record (proving
+# the evidence display is correct) and decodes real captured on-chain
+# rejection payloads (proving write errors show their real reason):
 cd frontend && npm test
-# 2 passed
+# 9 passed
 ```
 
 ## Network
@@ -133,6 +134,7 @@ Stated explicitly rather than left to be inferred from where a claim appears:
 - Every payable method: `create_event`, `accept_event`, `adjudicate`, `appeal`, `re_adjudicate`.
 - **The `validator_fn` fix and the real publisher-fetch authentication** -- a critical bug (the validator unwrapped the leader's result incorrectly and would have rejected every real adjudication unconditionally) and the switch to code-level `gl.nondet.web.get()` fetching were both found and fixed this round, in response to a Portal steward's review. Both are proven via `gltest`'s `direct_vm.run_validator()` -- the only way to exercise the real captured validator closure locally, since `gltest`'s own `run_nondet` mock never enforces `validator_fn`'s return value on `adjudicate()`'s outer result (see `docs/testing.md`) -- but neither has been exercised through genuine multi-node consensus on a live network yet.
 - **The frontend evidence display** -- a second steward round correctly noted the added tests stopped at the contract record shape and never exercised the frontend. `frontend/tests/evidence-display.test.tsx` now renders the real ticket page against a fixture record shaped exactly like `validate_source_reading()`'s output, including a source the real fetch-authentication check rejects, and asserts the rejection reason and provenance fields actually reach the DOM after a tab switch -- not just that the contract-side data is correct.
+- **Write-call error reporting** -- a third steward round hit a real bug live: every write after the first showed a generic, meaningless viem RPC error instead of the contract's actual rejection reason. Reproduced against the deployed contract for five distinct rejections and fixed in `frontend/src/lib/datum/errors.ts` (`extractContractRevertMessage`) -- see `CHANGELOG.md`'s 1.7.0 entry for the full root cause.
 - `claim()`'s actual payout -- proven at the internal ledger-accounting level (`claimable` zeroes, the right amount is returned) in `gltest`, not as a real GEN balance delta on a live account on this deployment.
 - The other six write methods with frontend UI entry points (`appeal`, `re_adjudicate`, `lapse_appeal`, `cancel_event`, `expire_event`, `reclaim_bonds`) -- type-checked, never clicked through a live wallet.
 

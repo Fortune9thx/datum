@@ -11,7 +11,7 @@ import { createClient } from "genlayer-js";
 import { studioDevnet } from "genlayer-js/chains";
 import type { CalldataEncodable } from "genlayer-js/types";
 import { CONTRACT_ADDRESS, checkLiveStatus } from "./network";
-import { describeUserError } from "./errors";
+import { describeUserError, extractContractRevertMessage } from "./errors";
 import { getProvider } from "./wallet";
 import type {
   DatumConfig,
@@ -187,7 +187,11 @@ export async function submitWrite(opts: {
     }
     return String(hash);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
+    // estimateTransactionFeesForWrite()'s dry run hides a real UserError
+    // behind a generic viem RPC error -- prefer the actual contract
+    // message when we can recover one (see extractContractRevertMessage).
+    const message =
+      extractContractRevertMessage(err) ?? (err instanceof Error ? err.message : String(err));
     throw new Error(describeUserError(message));
   }
 }

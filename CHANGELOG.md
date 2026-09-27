@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.7.0] - 2026-09-27
+
+### Fixed
+
+- **Every write call after the first one on an event showed a cryptic "Missing or invalid parameters. Double check you have provided the correct parameters. Details: execution failed Version: viem@2.56.8" instead of the real reason**, a Portal steward hit live after creating an event and trying to act on it. Root cause: `estimateTransactionFeesForWrite()` runs every write as a dry-run simulation first, and when `contracts/Datum.py` raises a normal `gl.vm.UserError` (wrong state, wrong caller, wrong side, a stale event id — the everyday rejections a real user hits) during that simulation, genlayer-js/viem collapse it into that one generic RPC error and discard the actual message, completely bypassing this app's own friendly `describeUserError()` mapping. Reproduced live against the deployed contract for five distinct real rejections; the actual message survives inside the thrown error's `cause.data.receipt.result` (GenVM's calldata-encoded string — a `0x01` type-tag byte followed by raw UTF-8), which every one of the five decoded cleanly. `extractContractRevertMessage()` (`frontend/src/lib/datum/errors.ts`) now recovers it before falling back to the raw viem message, so a rejected write shows its real reason again ("Only a bonded party to this event can do that.", "This event is not in the right state for that action.", etc.) instead of a meaningless client-library error.
+
+### Added
+
+- `frontend/tests/contract-revert-message.test.ts` — regression coverage using real base64 payloads captured live from the deployed contract (not fabricated), proving the decoder matches GenVM's actual on-chain error encoding for four distinct rejections, plus malformed-input and no-receipt fallback cases.
+
 ## [1.6.0] - 2026-09-27
 
 ### Fixed
