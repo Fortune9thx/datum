@@ -312,7 +312,34 @@ class Datum(gl.contract.Contract):
         publishers = list(rec["publishers"])
         event_id_local = event_id
 
+        # Populated by leader_fn() on every call (leader's own invocation,
+        # and again inside validator_fn's independent re-check) with
+        # whatever THAT call actually fetched. Each node's own process has
+        # only its own copy -- this never crosses the leader/validator
+        # boundary, which is exactly the point: it lets each side check the
+        # model's claimed "raw" against what THAT side itself just fetched,
+        # not against a value some other node claims to have seen.
+        last_fetched: dict = {}
+
         def leader_fn() -> str:
+            fetched = {}
+            for pub in publishers:
+                url = build_publisher_url(
+                    instrument_class=instrument_class,
+                    publisher=pub,
+                    station_id=station_id,
+                    bbox=bbox,
+                    window=window,
+                )
+                try:
+                    resp = gl.nondet.web.get(url)
+                    body = resp.body
+                    fetched[pub] = body.decode("utf-8", errors="replace") if body else None
+                except Exception:
+                    fetched[pub] = None
+            last_fetched.clear()
+            last_fetched.update(fetched)
+
             envelope = gl.nondet.exec_prompt(
                 _adjudication_prompt(
                     instrument_class=instrument_class,
@@ -323,29 +350,45 @@ class Datum(gl.contract.Contract):
                     policy=policy,
                     publishers=publishers,
                     event_id=event_id_local,
+                    fetched_raw=fetched,
                 )
             )
             return envelope
 
         def validator_fn(leader_result) -> bool:
-            # Never validate the leader's own claimed output structurally
-            # only -- re-acquire the evidence independently (re-run
-            # leader_fn from scratch: a fresh gl.nondet.exec_prompt call,
-            # not a re-read of leader_result) and compare the two
-            # independently-derived outcomes. A leader that fabricated a
-            # self-consistent-but-fictional envelope would pass a
-            # structural-only check; it cannot pass this one unless this
-            # validator's own independent fetch agrees.
+            # leader_result is a gl.vm.Return/VMError wrapper, NOT the
+            # leader's raw return value -- json.loads(str(leader_result))
+            # would parse the Python repr of the wrapper, never the JSON
+            # inside it, and would silently return False on every single
+            # call. Unwrap .calldata first.
+            payload = getattr(leader_result, "calldata", None)
+            if payload is None:
+                return False
             try:
-                leader_envelope = json.loads(str(leader_result))
+                leader_envelope = json.loads(str(payload))
             except (json.JSONDecodeError, TypeError):
                 return False
 
+            # Re-run leader_fn from scratch: a fresh, independent set of
+            # gl.nondet.web.get() fetches plus a fresh gl.nondet.exec_prompt
+            # call, never a re-read of leader_result. A leader that
+            # fabricated a self-consistent-but-fictional envelope would
+            # pass a structural-only check; it cannot pass this one unless
+            # this validator's own independent fetch agrees.
             my_raw = leader_fn()
             try:
                 my_envelope = json.loads(str(my_raw))
             except (json.JSONDecodeError, TypeError):
                 return False
+
+            # last_fetched now holds THIS validator's own just-completed
+            # fetch (the leader_fn() call immediately above overwrote it).
+            # Checking the LEADER's claimed envelope against it answers "did
+            # the leader's raw citation match what I, independently, can
+            # verify is real" -- checking the validator's OWN envelope
+            # against it answers "did my own model call faithfully echo
+            # what I actually fetched, or did it fabricate its citation."
+            my_fetched = dict(last_fetched)
 
             leader_eval = evaluate_envelope(
                 instrument_class=instrument_class,
@@ -359,6 +402,7 @@ class Datum(gl.contract.Contract):
                 event_id=event_id_local,
                 locked_publishers=publishers,
                 envelope=leader_envelope,
+                fetched_raw=my_fetched,
             )
             my_eval = evaluate_envelope(
                 instrument_class=instrument_class,
@@ -372,6 +416,7 @@ class Datum(gl.contract.Contract):
                 event_id=event_id_local,
                 locked_publishers=publishers,
                 envelope=my_envelope,
+                fetched_raw=my_fetched,
             )
             if not leader_eval["accepted"] or not my_eval["accepted"]:
                 return False

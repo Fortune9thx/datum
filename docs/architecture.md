@@ -73,43 +73,57 @@ breaking read-side change.
 ## The non-deterministic adjudication call
 
 `adjudicate()` makes exactly one top-level `gl.vm.run_nondet(leader_fn,
-validator_fn)` call. `leader_fn` calls `gl.nondet.exec_prompt` once with a
-frozen prompt template (`_adjudication_prompt`) built only from plain,
-already-validated local values (never `self.*`, so no consensus-state leak
-into the closure). `validator_fn` **calls `leader_fn()` again itself** --
-a fresh, independent `gl.nondet.exec_prompt` call, not a re-read of the
-leader's own claimed result -- runs `datum_lib.evaluate_envelope` on BOTH
-the leader's envelope and its own independently-fetched one, and only
-accepts if the two independently-derived (verdict, code, agreed_value)
+validator_fn)` call. `leader_fn` does two things, in order, both inside the
+same closure: first, for each of the event's locked publishers, it builds
+the exact query URL from already-locked constitution fields only
+(`build_publisher_url` -- station id/bbox/window, never anything caller- or
+model-supplied) and calls `gl.nondet.web.get()` itself; second, it hands
+the model the already-fetched raw responses and calls
+`gl.nondet.exec_prompt` once, instructing it to interpret that text and
+echo it back verbatim, never to retrieve anything on its own. Multiple
+`web.get()` calls followed by one `exec_prompt` call, all inside a single
+`leader_fn`, is the documented-safe shape for `genvm-lint`'s
+one-non-deterministic-call-per-method rule -- the rule is about nested
+top-level calls, not about how many nondet primitives a single leader
+function uses internally.
+
+`validator_fn` **calls `leader_fn()` again itself** -- a fresh, independent
+round of fetches plus a fresh `exec_prompt` call, not a re-read of the
+leader's own claimed result -- and runs `datum_lib.evaluate_envelope` on
+BOTH the leader's envelope and its own independently-fetched one, accepting
+only if the two independently-derived (verdict, code, agreed_value)
 outcomes agree. A leader that fabricated a self-consistent-but-fictional
-envelope (right shape, internally coherent, but not what the real
-publishers actually returned) would pass a structural-only check; it
-cannot pass this one unless the validator's own independent fetch agrees.
+envelope cannot pass unless the validator's own independent fetch agrees.
 
-A validator that only checks the leader's own claimed output for internal
-consistency -- without independently re-acquiring the underlying evidence
--- can be satisfied by a leader that fabricates a self-consistent but
-fictional envelope. Comparing two independent derivations closes that
-gap: the "does code trust the model's own verdict field, or even the
-model's own claimed evidence" question has one factual answer: no --
-every accepted record reflects two independently-executed prompt calls
-that agreed, not one call trusted at face value.
+`validator_fn`'s parameter is a `gl.vm.Return`/`VMError` wrapper, not the
+leader's raw return value -- `getattr(leader_result, "calldata", None)`
+unwraps it before parsing. An earlier version of this method did
+`json.loads(str(leader_result))` directly: `str()` on the wrapper produces
+its Python repr (`Return(calldata='...')`), never valid JSON, so every call
+fell into the `except` branch and `validator_fn` returned `False`
+unconditionally on a real network -- invisible locally because `gltest`'s
+own `run_nondet` mock never enforces `validator_fn`'s return value on the
+outer result at all (see `docs/testing.md`).
 
-`evaluate_envelope` also binds the envelope to the locked constitution
-before anything else is checked: it refuses outright if the envelope's
-`event_id` doesn't match the event actually being adjudicated (a stale or
-hallucinated envelope for a different event), and if any key in `sources`
-isn't one of this event's own locked `publishers` (an unauthorized
-publisher never counts toward the two-source agreement requirement, and
-is never silently dropped -- the whole envelope is refused). Every usable
-source must also carry a verbatim `raw` citation; `validate_source_reading`
-computes `stable_digest(raw)` from it and retains that digest in the
-accepted record, so the evidence view can show what was actually looked
-at. A usable source with no raw citation is refused as unauthenticated.
-This is retained evidence and a structural discipline, not a proof that
-the citation was genuinely fetched rather than paraphrased -- the actual
-defense against a fabricated reading remains the independent second
-fetch above, not the raw field on its own.
+Two whole-envelope bindings run before any per-source check: the envelope's
+`event_id` must match the event actually being adjudicated, and every key
+in `sources` must be one of this event's own locked `publishers`.
+
+Per source, `validate_source_reading` checks the claimed `"raw"` field
+against the REAL text `leader_fn` actually fetched for that publisher on
+that call (`stable_digest` comparison, tolerant of volatile formatting
+noise, not of a substantively different body) -- a source whose citation
+doesn't match, or whose fetch failed outright, is refused regardless of how
+plausible its other claimed fields look. Since the leader and each
+validator run as separate processes with no shared memory, this ground
+truth is always "what THIS node itself just fetched," compared against
+what the SAME node's own model call claims to have read (catching a model
+that fabricates its citation) and against what the OTHER side (leader vs.
+validator) claimed (via the existing verdict/code/agreed_value comparison
+above). The outer, post-consensus evaluation that actually writes
+`accepted_record` has no fetch of its own to check against -- by the time
+it runs, at least one validator has already verified the accepted
+envelope's citations during consensus itself.
 
 ## Why `run_nondet` and not `strict_eq`
 

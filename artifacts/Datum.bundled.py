@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import genlayer as gl
 from genlayer.types import *
 from genlayer.storage import TreeMap
+from datetime import datetime, timezone
 VALUE_SCALE = 100
 MIN_BET = 10 ** 16
 MAX_BET = 1000 * 10 ** 18
@@ -39,6 +40,32 @@ class DatumValidationError(ValueError):
         super().__init__(code)
         self.code = code
 PUBLISHER_REGISTRY = {'STATION_PRECIP': {'NWS_OBS': {'host': 'api.weather.gov', 'kind': 'json'}, 'GHCN_DAILY': {'host': 'www.ncei.noaa.gov', 'kind': 'json'}}, 'STATION_TEMP': {'NWS_OBS': {'host': 'api.weather.gov', 'kind': 'json'}, 'GHCN_DAILY': {'host': 'www.ncei.noaa.gov', 'kind': 'json'}}, 'STAGE': {'USGS_WATER': {'host': 'waterservices.usgs.gov', 'kind': 'json'}, 'NOAA_NWPS': {'host': 'api.water.noaa.gov', 'kind': 'json'}}, 'QUAKES': {'USGS_QUAKE': {'host': 'earthquake.usgs.gov', 'kind': 'json'}, 'EMSC': {'host': 'www.seismicportal.eu', 'kind': 'json'}}}
+
+def _iso_seconds(ts: int) -> str:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+
+def _iso_date(ts: int) -> str:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%d')
+
+def build_publisher_url(*, instrument_class: str, publisher: str, station_id: str | None, bbox, window: tuple[int, int]) -> str:
+    start, end = window
+    start_s = _iso_seconds(start)
+    end_s = _iso_seconds(end)
+    if publisher == 'USGS_QUAKE':
+        min_lon, min_lat, max_lon, max_lat = bbox
+        return f'https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime={start_s}&endtime={end_s}&minlongitude={min_lon}&maxlongitude={max_lon}&minlatitude={min_lat}&maxlatitude={max_lat}'
+    if publisher == 'EMSC':
+        min_lon, min_lat, max_lon, max_lat = bbox
+        return f'https://www.seismicportal.eu/fdsnws/event/1/query?format=json&starttime={start_s}&endtime={end_s}&minlongitude={min_lon}&maxlongitude={max_lon}&minlatitude={min_lat}&maxlatitude={max_lat}'
+    if publisher == 'NWS_OBS':
+        return f'https://api.weather.gov/stations/{station_id}/observations?start={start_s}Z&end={end_s}Z'
+    if publisher == 'GHCN_DAILY':
+        return f'https://www.ncei.noaa.gov/access/services/data/v1?dataset=daily-summaries&stations={station_id}&startDate={_iso_date(start)}&endDate={_iso_date(end)}&format=json'
+    if publisher == 'USGS_WATER':
+        return f'https://waterservices.usgs.gov/nwis/iv/?sites={station_id}&parameterCd=00065&format=json&startDT={start_s}Z&endDT={end_s}Z'
+    if publisher == 'NOAA_NWPS':
+        return f'https://api.water.noaa.gov/nwps/v1/gauges/{station_id}/stageflow'
+    raise ValueError(f'no URL builder for publisher {publisher}')
 FORECAST_HOST_MARKERS = ('forecast', 'gridpoint', 'outlook', 'predict')
 REANALYSIS_MARKERS = ('era5', 'reanalysis', 'merra', 'cfsr', 'narr')
 _STATION_ID_RE = {'STATION_PRECIP': re.compile('^[A-Z0-9]{4,11}$'), 'STATION_TEMP': re.compile('^[A-Z0-9]{4,11}$'), 'STAGE': re.compile('^\\d{8}$')}
@@ -195,8 +222,9 @@ def convert_to_class_unit(instrument_class: str, value_native: float, unit: str)
             return None
         return round(value_native * multiplier * VALUE_SCALE)
     return None
+_NO_GROUND_TRUTH = object()
 
-def validate_source_reading(*, instrument_class: str, expected_station_id: str | None, expected_bbox, window: tuple[int, int], product_status_policy: str, reading) -> dict:
+def validate_source_reading(*, instrument_class: str, expected_station_id: str | None, expected_bbox, window: tuple[int, int], product_status_policy: str, reading, expected_raw=_NO_GROUND_TRUTH) -> dict:
 
     def _row(*, usable, reason=None, converted=None, digest=None):
         return {'usable': usable, 'reason': reason, 'converted': converted, 'station_id': reading.get('station_id') if isinstance(reading, dict) else None, 't': reading.get('t') if isinstance(reading, dict) else None, 'value_native': reading.get('value_native') if isinstance(reading, dict) else None, 'unit': reading.get('unit') if isinstance(reading, dict) else None, 'product_status': reading.get('product_status') if isinstance(reading, dict) else None, 'digest': digest}
@@ -209,6 +237,11 @@ def validate_source_reading(*, instrument_class: str, expected_station_id: str |
     digest = stable_digest(raw) if isinstance(raw, str) and raw.strip() else None
     if digest is None:
         return _row(usable=False, reason='missing raw source citation')
+    if expected_raw is not _NO_GROUND_TRUTH:
+        if not isinstance(expected_raw, str):
+            return _row(usable=False, reason='publisher unreachable', digest=digest)
+        if digest != stable_digest(expected_raw):
+            return _row(usable=False, reason='raw citation does not match fetched data', digest=digest)
     t = reading.get('t')
     if not isinstance(t, int):
         return _row(usable=False, reason='missing timestamp', digest=digest)
@@ -268,7 +301,7 @@ def apply_threshold(agreed_value_scaled: int | None, threshold_scaled: int, cmp_
         return agreed_value_scaled <= threshold_scaled
     raise ValueError('unknown comparator')
 
-def evaluate_envelope(*, instrument_class: str, expected_station_id: str | None, expected_bbox, window: tuple[int, int], product_status_policy: str, tolerance_scaled: int, threshold_scaled: int, cmp_op: str, event_id: str, locked_publishers, envelope) -> dict:
+def evaluate_envelope(*, instrument_class: str, expected_station_id: str | None, expected_bbox, window: tuple[int, int], product_status_policy: str, tolerance_scaled: int, threshold_scaled: int, cmp_op: str, event_id: str, locked_publishers, envelope, fetched_raw: dict | None=None) -> dict:
     if not isinstance(envelope, dict):
         return _rejected('malformed envelope')
     if envelope.get('event_id') != event_id:
@@ -284,7 +317,10 @@ def evaluate_envelope(*, instrument_class: str, expected_station_id: str | None,
         return _rejected('malformed verdict/code')
     validated = {}
     for pub, reading in sources.items():
-        validated[pub] = validate_source_reading(instrument_class=instrument_class, expected_station_id=expected_station_id, expected_bbox=expected_bbox, window=window, product_status_policy=product_status_policy, reading=reading)
+        if fetched_raw is not None:
+            validated[pub] = validate_source_reading(instrument_class=instrument_class, expected_station_id=expected_station_id, expected_bbox=expected_bbox, window=window, product_status_policy=product_status_policy, reading=reading, expected_raw=fetched_raw.get(pub))
+        else:
+            validated[pub] = validate_source_reading(instrument_class=instrument_class, expected_station_id=expected_station_id, expected_bbox=expected_bbox, window=window, product_status_policy=product_status_policy, reading=reading)
     _, derived_code, agreed_value = aggregate_sources(tolerance_scaled=tolerance_scaled, validated_sources=validated)
     if derived_code == 'CLEAR' and agreed_value is not None:
         derived_verdict = 'YES' if apply_threshold(agreed_value, threshold_scaled, cmp_op) else 'NO'
@@ -327,7 +363,7 @@ def paginate(items: list, cursor: int, limit: int) -> tuple[list, int | None]:
     next_cursor = cursor + limit if cursor + limit < len(items) else None
     return (page, next_cursor)
 
-def _adjudication_prompt(*, instrument_class, station_id, bbox, depth, window, policy, publishers, event_id) -> str:
+def _adjudication_prompt(*, instrument_class, station_id, bbox, depth, window, policy, publishers, event_id, fetched_raw) -> str:
     is_quakes = instrument_class == 'QUAKES'
     if is_quakes:
         depth_label = 'any' if depth is None else f'{depth} km'
@@ -340,7 +376,15 @@ def _adjudication_prompt(*, instrument_class, station_id, bbox, depth, window, p
     else:
         source_shape = '{"usable": true|false, "station_id": "...", "t": <unix int>, "value_native": <number>, "unit": "...", "product_status": "FINAL"|"PRELIMINARY", "converted": <number>, "reason": null|"...", "raw": "..."}}, '
         depth_instruction = ''
-    return f'You are retrieving OFFICIAL, COMPLETED (never forecast) observation data for instrument class {instrument_class} at {subject}, for the locked window [{window[0]}, {window[1]}) (Unix chain time), from ONLY these locked publishers: {publishers}. Product status policy: {policy}.{depth_instruction}\n\nReturn ONLY a single JSON object with this exact shape (no prose):\n{{"event_id": "' + str(event_id) + '", "sources": {"<publisher>": ' + source_shape + '"verdict": "YES"|"NO"|"INCONCLUSIVE", "code": "CLEAR"|"MISSING"|"CONFLICT"|"PRELIMINARY_BLOCKED"}\n\nIf a publisher\'s page is unreachable, wrong station, outside the window, a forecast product, or PRELIMINARY under a FINAL_ONLY policy, set that source\'s usable=false with a reason string and never impute a value. When usable is true, "raw" MUST be the verbatim response text or JSON body you actually read from that publisher -- not a re-summary of the fields above, and never fabricated. A usable source with no genuine raw citation will be rejected: it cannot be authenticated as real observation data. This proposed verdict/code is advisory only -- the caller re-derives and validates it independently.'
+    fetched_blocks = []
+    for pub in publishers:
+        body = fetched_raw.get(pub) if fetched_raw else None
+        if body is None:
+            fetched_blocks.append(f'=== {pub} ===\n(FETCH FAILED -- this publisher was unreachable)')
+        else:
+            fetched_blocks.append(f'=== {pub} ===\n{body}')
+    fetched_text = '\n\n'.join(fetched_blocks)
+    return f'''You are analyzing OFFICIAL, COMPLETED (never forecast) observation data for instrument class {instrument_class} at {subject}, for the locked window [{window[0]}, {window[1]}) (Unix chain time), from ONLY these locked publishers: {publishers}. Product status policy: {policy}.{depth_instruction}\n\nBelow is the RAW response already fetched moments ago, in code, directly from each locked publisher's own official endpoint. Do NOT retrieve, browse, or look up anything yourself -- interpret ONLY the text shown below.\n\n{fetched_text}\n\nReturn ONLY a single JSON object with this exact shape (no prose):\n{{"event_id": "''' + str(event_id) + '", "sources": {"<publisher>": ' + source_shape + '"verdict": "YES"|"NO"|"INCONCLUSIVE", "code": "CLEAR"|"MISSING"|"CONFLICT"|"PRELIMINARY_BLOCKED"}\n\nIf a publisher\'s block above says FETCH FAILED, contains no matching reading, is wrong station, outside the window, a forecast product, or PRELIMINARY under a FINAL_ONLY policy, set that source\'s usable=false with a reason string and never impute a value. Every source\'s "raw" field -- usable or not -- MUST be copied EXACTLY, character for character, from that publisher\'s block above (including the literal "(FETCH FAILED...)" text if that is what appears there). Never rewrite, summarize, translate, or fabricate it: your copy is checked against the original text and a mismatch gets the whole source rejected as unauthenticated, regardless of how accurate your extracted fields are. This proposed verdict/code is advisory only -- the caller re-derives and validates it independently.'
 
 def _now_ts() -> int:
     return int(datetime.now(timezone.utc).timestamp())
@@ -520,14 +564,29 @@ class Datum(gl.contract.Contract):
         policy = rec['product_status_policy']
         publishers = list(rec['publishers'])
         event_id_local = event_id
+        last_fetched: dict = {}
 
         def leader_fn() -> str:
-            envelope = gl.nondet.exec_prompt(_adjudication_prompt(instrument_class=instrument_class, station_id=station_id, bbox=bbox, depth=depth, window=window, policy=policy, publishers=publishers, event_id=event_id_local))
+            fetched = {}
+            for pub in publishers:
+                url = build_publisher_url(instrument_class=instrument_class, publisher=pub, station_id=station_id, bbox=bbox, window=window)
+                try:
+                    resp = gl.nondet.web.get(url)
+                    body = resp.body
+                    fetched[pub] = body.decode('utf-8', errors='replace') if body else None
+                except Exception:
+                    fetched[pub] = None
+            last_fetched.clear()
+            last_fetched.update(fetched)
+            envelope = gl.nondet.exec_prompt(_adjudication_prompt(instrument_class=instrument_class, station_id=station_id, bbox=bbox, depth=depth, window=window, policy=policy, publishers=publishers, event_id=event_id_local, fetched_raw=fetched))
             return envelope
 
         def validator_fn(leader_result) -> bool:
+            payload = getattr(leader_result, 'calldata', None)
+            if payload is None:
+                return False
             try:
-                leader_envelope = json.loads(str(leader_result))
+                leader_envelope = json.loads(str(payload))
             except (json.JSONDecodeError, TypeError):
                 return False
             my_raw = leader_fn()
@@ -535,8 +594,9 @@ class Datum(gl.contract.Contract):
                 my_envelope = json.loads(str(my_raw))
             except (json.JSONDecodeError, TypeError):
                 return False
-            leader_eval = evaluate_envelope(instrument_class=instrument_class, expected_station_id=station_id, expected_bbox=bbox, window=window, product_status_policy=policy, tolerance_scaled=rec['tolerance'], threshold_scaled=rec['threshold'], cmp_op=rec['cmp'], event_id=event_id_local, locked_publishers=publishers, envelope=leader_envelope)
-            my_eval = evaluate_envelope(instrument_class=instrument_class, expected_station_id=station_id, expected_bbox=bbox, window=window, product_status_policy=policy, tolerance_scaled=rec['tolerance'], threshold_scaled=rec['threshold'], cmp_op=rec['cmp'], event_id=event_id_local, locked_publishers=publishers, envelope=my_envelope)
+            my_fetched = dict(last_fetched)
+            leader_eval = evaluate_envelope(instrument_class=instrument_class, expected_station_id=station_id, expected_bbox=bbox, window=window, product_status_policy=policy, tolerance_scaled=rec['tolerance'], threshold_scaled=rec['threshold'], cmp_op=rec['cmp'], event_id=event_id_local, locked_publishers=publishers, envelope=leader_envelope, fetched_raw=my_fetched)
+            my_eval = evaluate_envelope(instrument_class=instrument_class, expected_station_id=station_id, expected_bbox=bbox, window=window, product_status_policy=policy, tolerance_scaled=rec['tolerance'], threshold_scaled=rec['threshold'], cmp_op=rec['cmp'], event_id=event_id_local, locked_publishers=publishers, envelope=my_envelope, fetched_raw=my_fetched)
             if not leader_eval['accepted'] or not my_eval['accepted']:
                 return False
             return leader_eval['verdict'] == my_eval['verdict'] and leader_eval['code'] == my_eval['code'] and (leader_eval['agreed_value'] == my_eval['agreed_value'])

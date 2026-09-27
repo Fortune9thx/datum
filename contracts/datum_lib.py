@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import datetime, timezone
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -142,6 +143,80 @@ PUBLISHER_REGISTRY = {
         "EMSC": {"host": "www.seismicportal.eu", "kind": "json"},
     },
 }
+
+
+def _iso_seconds(ts: int) -> str:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _iso_date(ts: int) -> str:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+
+
+def build_publisher_url(
+    *,
+    instrument_class: str,
+    publisher: str,
+    station_id: str | None,
+    bbox,
+    window: tuple[int, int],
+) -> str:
+    """Builds the real, official query URL for one locked publisher, using
+    only the locked constitution fields (station id / bbox / window) --
+    never anything caller- or model-supplied beyond what create_event()
+    already locked. This is what makes "authenticate the locked official
+    publisher data" true by construction: code decides the exact URL
+    fetched inside the leader's own nondet closure, the model never gets to
+    choose where data comes from.
+
+    Every URL here is a real, publicly documented endpoint for the named
+    publisher -- not a placeholder. Raises ValueError for an unknown
+    instrument_class/publisher pair (should never happen for a locked
+    constitution, since create_event() already validated the publisher is
+    a member of PUBLISHER_REGISTRY[instrument_class]).
+    """
+    start, end = window
+    start_s = _iso_seconds(start)
+    end_s = _iso_seconds(end)
+
+    if publisher == "USGS_QUAKE":
+        min_lon, min_lat, max_lon, max_lat = bbox
+        return (
+            "https://earthquake.usgs.gov/fdsnws/event/1/query"
+            f"?format=geojson&starttime={start_s}&endtime={end_s}"
+            f"&minlongitude={min_lon}&maxlongitude={max_lon}"
+            f"&minlatitude={min_lat}&maxlatitude={max_lat}"
+        )
+    if publisher == "EMSC":
+        min_lon, min_lat, max_lon, max_lat = bbox
+        return (
+            "https://www.seismicportal.eu/fdsnws/event/1/query"
+            f"?format=json&starttime={start_s}&endtime={end_s}"
+            f"&minlongitude={min_lon}&maxlongitude={max_lon}"
+            f"&minlatitude={min_lat}&maxlatitude={max_lat}"
+        )
+    if publisher == "NWS_OBS":
+        return (
+            f"https://api.weather.gov/stations/{station_id}/observations"
+            f"?start={start_s}Z&end={end_s}Z"
+        )
+    if publisher == "GHCN_DAILY":
+        return (
+            "https://www.ncei.noaa.gov/access/services/data/v1"
+            f"?dataset=daily-summaries&stations={station_id}"
+            f"&startDate={_iso_date(start)}&endDate={_iso_date(end)}&format=json"
+        )
+    if publisher == "USGS_WATER":
+        return (
+            "https://waterservices.usgs.gov/nwis/iv/"
+            f"?sites={station_id}&parameterCd=00065&format=json"
+            f"&startDT={start_s}Z&endDT={end_s}Z"
+        )
+    if publisher == "NOAA_NWPS":
+        return f"https://api.water.noaa.gov/nwps/v1/gauges/{station_id}/stageflow"
+
+    raise ValueError(f"no URL builder for publisher {publisher}")
+
 
 # Explicit forecast-endpoint denylist substrings -- refused even if the host
 # family would otherwise be allowlisted (e.g. NWS forecast vs NWS obs).
@@ -428,6 +503,9 @@ def convert_to_class_unit(instrument_class: str, value_native: float, unit: str)
     return None
 
 
+_NO_GROUND_TRUTH = object()  # sentinel: "no fetch ground truth attempted at this call site"
+
+
 def validate_source_reading(
     *,
     instrument_class: str,
@@ -436,6 +514,7 @@ def validate_source_reading(
     window: tuple[int, int],
     product_status_policy: str,
     reading,
+    expected_raw=_NO_GROUND_TRUTH,
 ) -> dict:
     """Validates one publisher's reading object against the locked
     constitution and returns the full provenance row the evidence view
@@ -449,9 +528,25 @@ def validate_source_reading(
     {"usable": bool, "station_id": str, "t": int, "value_native": number,
      "unit": str, "product_status": str, "converted": number, "reason": str|None,
      "raw": str, "lat": number, "lon": number}  (lat/lon required only for
-    QUAKES; "raw" is the verbatim source response text the model read --
-    required for every source, usable or not, since a reading with no raw
-    citation cannot be authenticated at all)
+    QUAKES; "raw" is the verbatim source response text the model claims to
+    have read -- required for every source, usable or not)
+
+    `expected_raw` has three meaningful states, distinguished from a plain
+    `str | None` by the module-level `_NO_GROUND_TRUTH` sentinel default:
+      - `_NO_GROUND_TRUTH` (default): no fetch was attempted for this source
+        at this call site (see Datum.py's adjudicate() for exactly which
+        call sites have one available) -- only the raw-present check runs.
+      - `None`: a fetch WAS attempted, at the real locked URL
+        (build_publisher_url()), and it failed -- the source is refused
+        regardless of what the model claims, since there is nothing real to
+        authenticate against.
+      - a `str`: the ACTUAL raw text code itself fetched, independent of
+        anything the model said. The reading's claimed "raw" must match it
+        (compared via stable_digest, which tolerates volatile formatting
+        noise but not a substantively different body) or the source is
+        refused as unauthenticated -- hashing a citation is not
+        verification by itself; comparing that hash against code's own
+        independently-fetched ground truth is.
 
     Returns {"usable": bool, "reason": str|None, "converted": int|None,
     "station_id": str|None, "t": int|None, "value_native": number|None,
@@ -484,6 +579,12 @@ def validate_source_reading(
     digest = stable_digest(raw) if isinstance(raw, str) and raw.strip() else None
     if digest is None:
         return _row(usable=False, reason="missing raw source citation")
+
+    if expected_raw is not _NO_GROUND_TRUTH:
+        if not isinstance(expected_raw, str):
+            return _row(usable=False, reason="publisher unreachable", digest=digest)
+        if digest != stable_digest(expected_raw):
+            return _row(usable=False, reason="raw citation does not match fetched data", digest=digest)
 
     t = reading.get("t")
     if not isinstance(t, int):
@@ -589,6 +690,7 @@ def evaluate_envelope(
     event_id: str,
     locked_publishers,
     envelope,
+    fetched_raw: dict | None = None,
 ) -> dict:
     """Full code-side acceptance of a leader-proposed JSON envelope.
 
@@ -608,6 +710,13 @@ def evaluate_envelope(
     locked `publishers` (a source keyed by any other id is refused, never
     silently dropped and never allowed to count toward the two-source
     agreement requirement).
+
+    `fetched_raw`, when given, is {publisher_id: raw_text_or_None} -- the
+    ACTUAL data code itself fetched from each locked publisher's real URL
+    at this call site (see Datum.py's adjudicate() for which call sites
+    have one). Passed straight through to validate_source_reading() per
+    publisher so each source's claimed "raw" is checked against real,
+    independently-fetched ground truth, not just hashed and trusted.
 
     `envelope` is intentionally left untyped (not `dict`): it is the raw,
     untrusted structure decoded from the leader's own JSON output, so the
@@ -643,14 +752,25 @@ def evaluate_envelope(
 
     validated = {}
     for pub, reading in sources.items():
-        validated[pub] = validate_source_reading(
-            instrument_class=instrument_class,
-            expected_station_id=expected_station_id,
-            expected_bbox=expected_bbox,
-            window=window,
-            product_status_policy=product_status_policy,
-            reading=reading,
-        )
+        if fetched_raw is not None:
+            validated[pub] = validate_source_reading(
+                instrument_class=instrument_class,
+                expected_station_id=expected_station_id,
+                expected_bbox=expected_bbox,
+                window=window,
+                product_status_policy=product_status_policy,
+                reading=reading,
+                expected_raw=fetched_raw.get(pub),
+            )
+        else:
+            validated[pub] = validate_source_reading(
+                instrument_class=instrument_class,
+                expected_station_id=expected_station_id,
+                expected_bbox=expected_bbox,
+                window=window,
+                product_status_policy=product_status_policy,
+                reading=reading,
+            )
 
     _, derived_code, agreed_value = aggregate_sources(
         tolerance_scaled=tolerance_scaled,
@@ -756,13 +876,24 @@ def paginate(items: list, cursor: int, limit: int) -> tuple[list, int | None]:
 
 
 def _adjudication_prompt(
-    *, instrument_class, station_id, bbox, depth, window, policy, publishers, event_id
+    *, instrument_class, station_id, bbox, depth, window, policy, publishers, event_id,
+    fetched_raw,
 ) -> str:
-    """Frozen prompt template. The model is instructed to return ONLY the
-    structured JSON envelope described in this module's docstring -- it
-    never returns a bare YES/NO or an amount as a trusted value;
-    evaluate_envelope() independently re-derives and validates every field
-    before anything is accepted.
+    """Frozen prompt template. The model INTERPRETS ONLY -- it never
+    retrieves anything itself. `fetched_raw` is {publisher_id:
+    raw_text_or_None}, the actual response code itself already fetched (see
+    Datum.py's adjudicate() and build_publisher_url()) from each locked
+    publisher's real, official endpoint, embedded verbatim below. The model
+    extracts structured fields from that embedded text and echoes the exact
+    same text back as "raw" -- it is never asked to browse, retrieve, or
+    invent a raw citation, and code independently checks the echoed "raw"
+    against what was actually fetched (see validate_source_reading's
+    `expected_raw` parameter) before trusting anything else in that source.
+
+    The model is instructed to return ONLY the structured JSON envelope
+    described in this module's docstring -- it never returns a bare YES/NO
+    or an amount as a trusted value; evaluate_envelope() independently
+    re-derives and validates every field before anything is accepted.
 
     For QUAKES, the constitution's locked depth (if any) is surfaced in the
     prompt text, and the requested JSON shape adds "lat"/"lon" so
@@ -797,26 +928,43 @@ def _adjudication_prompt(
         )
         depth_instruction = ""
 
+    fetched_blocks = []
+    for pub in publishers:
+        body = fetched_raw.get(pub) if fetched_raw else None
+        if body is None:
+            fetched_blocks.append(f"=== {pub} ===\n(FETCH FAILED -- this publisher was unreachable)")
+        else:
+            fetched_blocks.append(f"=== {pub} ===\n{body}")
+    fetched_text = "\n\n".join(fetched_blocks)
+
     return (
-        "You are retrieving OFFICIAL, COMPLETED (never forecast) observation "
+        "You are analyzing OFFICIAL, COMPLETED (never forecast) observation "
         f"data for instrument class {instrument_class} at {subject}, for the "
         f"locked window [{window[0]}, {window[1]}) (Unix chain time), from "
         f"ONLY these locked publishers: {publishers}. Product status policy: "
         f"{policy}.{depth_instruction}\n\n"
+        "Below is the RAW response already fetched moments ago, in code, "
+        "directly from each locked publisher's own official endpoint. Do "
+        "NOT retrieve, browse, or look up anything yourself -- interpret "
+        "ONLY the text shown below.\n\n"
+        f"{fetched_text}\n\n"
         "Return ONLY a single JSON object with this exact shape (no prose):\n"
         '{"event_id": "' + str(event_id) + '", "sources": {"<publisher>": '
         + source_shape +
         '"verdict": "YES"|"NO"|"INCONCLUSIVE", "code": "CLEAR"|"MISSING"|'
         '"CONFLICT"|"PRELIMINARY_BLOCKED"}\n\n'
-        "If a publisher's page is unreachable, wrong station, outside the "
-        "window, a forecast product, or PRELIMINARY under a FINAL_ONLY "
-        "policy, set that source's usable=false with a reason string and "
-        "never impute a value. When usable is true, \"raw\" MUST be the "
-        "verbatim response text or JSON body you actually read from that "
-        "publisher -- not a re-summary of the fields above, and never "
-        "fabricated. A usable source with no genuine raw citation will be "
-        "rejected: it cannot be authenticated as real observation data. "
-        "This proposed verdict/code is advisory only -- the caller "
-        "re-derives and validates it independently."
+        "If a publisher's block above says FETCH FAILED, contains no "
+        "matching reading, is wrong station, outside the window, a "
+        "forecast product, or PRELIMINARY under a FINAL_ONLY policy, set "
+        "that source's usable=false with a reason string and never impute "
+        "a value. Every source's \"raw\" field -- usable or not -- MUST be "
+        "copied EXACTLY, character for character, from that publisher's "
+        "block above (including the literal \"(FETCH FAILED...)\" text if "
+        "that is what appears there). Never rewrite, summarize, translate, "
+        "or fabricate it: your copy is checked against the original text "
+        "and a mismatch gets the whole source rejected as unauthenticated, "
+        "regardless of how accurate your extracted fields are. This "
+        "proposed verdict/code is advisory only -- the caller re-derives "
+        "and validates it independently."
     )
 

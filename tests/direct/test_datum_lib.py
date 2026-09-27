@@ -337,6 +337,136 @@ class TestSourceReadingValidation:
         assert row["usable"] is False
         assert row["reason"] == "missing raw source citation"
 
+    def test_raw_matching_expected_fetch_stays_usable(self):
+        window = _window()
+        raw = _raw_for(stationId="USW00094728", value=12.3, unit="mm")
+        reading = {
+            "usable": True,
+            "station_id": "USW00094728",
+            "t": window[0] + 100,
+            "value_native": 12.3,
+            "unit": "mm",
+            "product_status": "FINAL",
+            "raw": raw,
+        }
+        row = lib.validate_source_reading(
+            instrument_class="STATION_PRECIP",
+            expected_station_id="USW00094728",
+            expected_bbox=None,
+            window=window,
+            product_status_policy="FINAL_ONLY",
+            reading=reading,
+            expected_raw=raw,
+        )
+        assert row["usable"] is True
+
+    def test_raw_matching_expected_fetch_after_volatile_reformatting_stays_usable(self):
+        # A byte-identical copy isn't required -- stable_digest() strips
+        # volatile keys, so a model that re-serializes the same underlying
+        # fetched JSON (different key order, whitespace, a fresh
+        # generationtime_ms) still authenticates correctly.
+        window = _window()
+        fetched = json.dumps({"stationId": "USW00094728", "value": 12.3, "unit": "mm", "generationtime_ms": 4.2})
+        echoed = json.dumps({"generationtime_ms": 9.9, "unit": "mm", "value": 12.3, "stationId": "USW00094728"})
+        reading = {
+            "usable": True,
+            "station_id": "USW00094728",
+            "t": window[0] + 100,
+            "value_native": 12.3,
+            "unit": "mm",
+            "product_status": "FINAL",
+            "raw": echoed,
+        }
+        row = lib.validate_source_reading(
+            instrument_class="STATION_PRECIP",
+            expected_station_id="USW00094728",
+            expected_bbox=None,
+            window=window,
+            product_status_policy="FINAL_ONLY",
+            reading=reading,
+            expected_raw=fetched,
+        )
+        assert row["usable"] is True
+
+    def test_raw_not_matching_expected_fetch_rejected(self):
+        # The core authentication check: a model that fabricates its own
+        # "raw" citation instead of echoing what code actually fetched must
+        # be caught, regardless of how plausible the fabricated text looks.
+        window = _window()
+        reading = {
+            "usable": True,
+            "station_id": "USW00094728",
+            "t": window[0] + 100,
+            "value_native": 12.3,
+            "unit": "mm",
+            "product_status": "FINAL",
+            "raw": _raw_for(stationId="USW00094728", value=12.3, unit="mm"),
+        }
+        row = lib.validate_source_reading(
+            instrument_class="STATION_PRECIP",
+            expected_station_id="USW00094728",
+            expected_bbox=None,
+            window=window,
+            product_status_policy="FINAL_ONLY",
+            reading=reading,
+            expected_raw='{"totally": "different", "fetched": "content"}',
+        )
+        assert row["usable"] is False
+        assert row["reason"] == "raw citation does not match fetched data"
+
+    def test_fetch_failure_ground_truth_forces_unusable_regardless_of_claim(self):
+        # expected_raw=None means code itself tried the real fetch and it
+        # failed -- the source is refused even if the model's own reading
+        # looks perfectly well-formed, since there is nothing real to
+        # authenticate it against.
+        window = _window()
+        reading = {
+            "usable": True,
+            "station_id": "USW00094728",
+            "t": window[0] + 100,
+            "value_native": 12.3,
+            "unit": "mm",
+            "product_status": "FINAL",
+            "raw": _raw_for(stationId="USW00094728", value=12.3, unit="mm"),
+        }
+        row = lib.validate_source_reading(
+            instrument_class="STATION_PRECIP",
+            expected_station_id="USW00094728",
+            expected_bbox=None,
+            window=window,
+            product_status_policy="FINAL_ONLY",
+            reading=reading,
+            expected_raw=None,
+        )
+        assert row["usable"] is False
+        assert row["reason"] == "publisher unreachable"
+
+    def test_no_ground_truth_argument_skips_the_check_entirely(self):
+        # When the caller doesn't pass expected_raw at all (the default
+        # _NO_GROUND_TRUTH sentinel), only the raw-present check runs --
+        # this is the call shape used where no fetch ground truth is
+        # available at that particular call site (see Datum.py's
+        # adjudicate() for exactly which site that is).
+        window = _window()
+        reading = {
+            "usable": True,
+            "station_id": "USW00094728",
+            "t": window[0] + 100,
+            "value_native": 12.3,
+            "unit": "mm",
+            "product_status": "FINAL",
+            "raw": _raw_for(stationId="USW00094728", value=12.3, unit="mm"),
+        }
+        row = lib.validate_source_reading(
+            instrument_class="STATION_PRECIP",
+            expected_station_id="USW00094728",
+            expected_bbox=None,
+            window=window,
+            product_status_policy="FINAL_ONLY",
+            reading=reading,
+        )
+        assert row["usable"] is True
+
     def test_station_id_mismatch_unusable(self):
         window = _window()
         reading = {
@@ -467,6 +597,97 @@ class TestSourceReadingValidation:
         )
         assert row["usable"] is False
         assert row["reason"] == "epicenter outside bbox"
+
+
+# ---------------------------------------------------------------------------
+# Publisher URL construction -- the actual "authenticate the locked official
+# publisher data" mechanism: code decides the exact URL fetched, using only
+# constitution fields already locked at create_event time. Every URL below
+# is a real, documented public endpoint for the named publisher.
+# ---------------------------------------------------------------------------
+
+
+class TestPublisherUrlBuilder:
+    def test_usgs_quake_url_uses_locked_bbox_and_window(self):
+        url = lib.build_publisher_url(
+            instrument_class="QUAKES",
+            publisher="USGS_QUAKE",
+            station_id=None,
+            bbox=[-122.6, 37.2, -121.7, 38.0],
+            window=(1_790_409_000, 1_790_415_000),
+        )
+        assert url.startswith("https://earthquake.usgs.gov/fdsnws/event/1/query")
+        assert "minlongitude=-122.6" in url
+        assert "maxlatitude=38.0" in url
+        assert "format=geojson" in url
+
+    def test_emsc_url_uses_locked_bbox_and_window(self):
+        url = lib.build_publisher_url(
+            instrument_class="QUAKES",
+            publisher="EMSC",
+            station_id=None,
+            bbox=[-122.6, 37.2, -121.7, 38.0],
+            window=(1_790_409_000, 1_790_415_000),
+        )
+        assert url.startswith("https://www.seismicportal.eu/fdsnws/event/1/query")
+        assert "format=json" in url
+
+    def test_nws_obs_url_uses_locked_station_id(self):
+        url = lib.build_publisher_url(
+            instrument_class="STATION_PRECIP",
+            publisher="NWS_OBS",
+            station_id="USW00094728",
+            bbox=None,
+            window=(1_790_409_000, 1_790_415_000),
+        )
+        assert url == (
+            "https://api.weather.gov/stations/USW00094728/observations"
+            "?start=2026-09-26T07:50:00Z&end=2026-09-26T09:30:00Z"
+        )
+
+    def test_ghcn_daily_url_uses_locked_station_id_and_date_range(self):
+        url = lib.build_publisher_url(
+            instrument_class="STATION_PRECIP",
+            publisher="GHCN_DAILY",
+            station_id="USW00094728",
+            bbox=None,
+            window=(1_790_409_000, 1_790_415_000),
+        )
+        assert url.startswith("https://www.ncei.noaa.gov/access/services/data/v1")
+        assert "stations=USW00094728" in url
+        assert "dataset=daily-summaries" in url
+
+    def test_usgs_water_url_uses_locked_site_number(self):
+        url = lib.build_publisher_url(
+            instrument_class="STAGE",
+            publisher="USGS_WATER",
+            station_id="01646500",
+            bbox=None,
+            window=(1_790_409_000, 1_790_415_000),
+        )
+        assert url.startswith("https://waterservices.usgs.gov/nwis/iv/")
+        assert "sites=01646500" in url
+        assert "parameterCd=00065" in url
+
+    def test_noaa_nwps_url_uses_locked_gauge_id(self):
+        url = lib.build_publisher_url(
+            instrument_class="STAGE",
+            publisher="NOAA_NWPS",
+            station_id="01646500",
+            bbox=None,
+            window=(1_790_409_000, 1_790_415_000),
+        )
+        assert url == "https://api.water.noaa.gov/nwps/v1/gauges/01646500/stageflow"
+
+    def test_unknown_publisher_raises(self):
+        with _expect(ValueError):
+            lib.build_publisher_url(
+                instrument_class="STAGE",
+                publisher="NOT_A_REAL_PUBLISHER",
+                station_id="01646500",
+                bbox=None,
+                window=(1_790_409_000, 1_790_415_000),
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -745,6 +966,7 @@ class TestAdjudicationPrompt:
             policy="FINAL_ONLY",
             publishers=["USGS_QUAKE", "EMSC"],
             event_id="1",
+            fetched_raw={"USGS_QUAKE": '{"features": []}', "EMSC": '{"features": []}'},
         )
         kwargs.update(overrides)
         return kwargs
@@ -772,6 +994,7 @@ class TestAdjudicationPrompt:
             policy="FINAL_ONLY",
             publishers=["USGS_WATER", "NOAA_NWPS"],
             event_id="1",
+            fetched_raw={"USGS_WATER": '{"value": {}}', "NOAA_NWPS": None},
         )
         assert "depth=" not in prompt
         assert '"lat"' not in prompt

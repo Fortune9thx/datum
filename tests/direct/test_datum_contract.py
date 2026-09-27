@@ -367,6 +367,122 @@ class TestAdjudicationSourceBindingAndProvenance:
         assert event["state"] == "ACTIVE"
 
 
+class TestValidatorFnRealFetchAndAuthentication:
+    """gltest's own run_nondet mock never enforces validator_fn's return
+    value on adjudicate()'s outer result -- every other adjudicate test in
+    this file passes regardless of what validator_fn computes, because the
+    outer evaluation (see contracts/Datum.py) deliberately has no fetch
+    ground truth to check against. direct_vm.run_validator() is the
+    documented way around that: it invokes the real captured validator_fn
+    with a genuine gl.vm.Return wrapper, which is what actually proves two
+    things nothing else in this suite can: (1) the leader_result.calldata
+    unwrapping fix is real -- the previous json.loads(str(leader_result))
+    pattern would have returned False unconditionally under this exact
+    wrapper, invisibly, since gltest's mock never surfaced it; (2) the real
+    gl.nondet.web.get() fetch plus raw-citation ground-truth check actually
+    rejects a leader whose claimed raw doesn't match an independent
+    re-fetch, not just in the pure datum_lib tests but through the full
+    leader_fn() closure as the contract itself calls it."""
+
+    def _create_accept(self, contract, direct_vm, direct_alice, direct_bob):
+        with direct_vm.prank(direct_alice):
+            direct_vm.value = STAKE + CREATE_BOND
+            event_id = contract.create_event(
+                constitution_json=_precip_constitution(), side="YES", stake=str(STAKE)
+            )
+        with direct_vm.prank(direct_bob):
+            direct_vm.value = STAKE
+            contract.accept_event(event_id=event_id, side="NO")
+        return event_id
+
+    def _envelope(self, event_id, nws_raw, ghcn_raw):
+        return json.dumps(
+            {
+                "event_id": event_id,
+                "sources": {
+                    "NWS_OBS": {
+                        "usable": True, "station_id": "USW00094728",
+                        "t": NOW_PLACEHOLDER + 3 * 3600 + 100,
+                        "value_native": 12, "unit": "mm",
+                        "product_status": "FINAL", "raw": nws_raw,
+                    },
+                    "GHCN_DAILY": {
+                        "usable": True, "station_id": "USW00094728",
+                        "t": NOW_PLACEHOLDER + 3 * 3600 + 200,
+                        "value_native": 13, "unit": "mm",
+                        "product_status": "FINAL", "raw": ghcn_raw,
+                    },
+                },
+                "verdict": "YES",
+                "code": "CLEAR",
+            }
+        )
+
+    def test_validator_agrees_when_its_own_refetch_matches_leader_claim(
+        self, contract, direct_vm, direct_alice, direct_bob
+    ):
+        event_id = self._create_accept(contract, direct_vm, direct_alice, direct_bob)
+        nws_raw = '{"properties": {"value": 12, "unit": "mm"}}'
+        ghcn_raw = '{"value": 13, "unit": "mm"}'
+        direct_vm.mock_web(r"api\.weather\.gov", {"method": "GET", "status": 200, "body": nws_raw})
+        direct_vm.mock_web(r"ncei\.noaa\.gov", {"method": "GET", "status": 200, "body": ghcn_raw})
+
+        envelope = self._envelope(event_id, nws_raw, ghcn_raw)
+        direct_vm.mock_llm(r".*", envelope)
+        direct_vm.warp("2027-01-15T18:00:00Z")
+        with direct_vm.prank(direct_alice):
+            direct_vm.value = ADJUDICATE_BOND
+            contract.adjudicate(event_id=event_id)  # captures the validator
+
+        assert direct_vm.run_validator(leader_result=envelope) is True
+
+    def test_validator_rejects_leader_whose_raw_does_not_match_its_own_refetch(
+        self, contract, direct_vm, direct_alice, direct_bob
+    ):
+        # The core authentication proof: the leader's envelope claims a raw
+        # citation for NWS_OBS that does NOT match what the validator's own
+        # independent gl.nondet.web.get() call (mocked below) actually
+        # returns -- a fabricated/substituted citation, exactly what
+        # "hashing purported raw text does not verify its publisher
+        # origin" warned was still possible before this fix.
+        event_id = self._create_accept(contract, direct_vm, direct_alice, direct_bob)
+        real_nws_raw = '{"properties": {"value": 12, "unit": "mm"}}'
+        real_ghcn_raw = '{"value": 13, "unit": "mm"}'
+        direct_vm.mock_web(r"api\.weather\.gov", {"method": "GET", "status": 200, "body": real_nws_raw})
+        direct_vm.mock_web(r"ncei\.noaa\.gov", {"method": "GET", "status": 200, "body": real_ghcn_raw})
+
+        fabricated_envelope = self._envelope(event_id, '{"fabricated": true}', real_ghcn_raw)
+        direct_vm.mock_llm(r".*", fabricated_envelope)
+        direct_vm.warp("2027-01-15T18:00:00Z")
+        with direct_vm.prank(direct_alice):
+            direct_vm.value = ADJUDICATE_BOND
+            contract.adjudicate(event_id=event_id)
+
+        assert direct_vm.run_validator(leader_result=fabricated_envelope) is False
+
+    def test_validator_rejects_when_its_own_refetch_is_unreachable(
+        self, contract, direct_vm, direct_alice, direct_bob
+    ):
+        # No mock_web registered at all -- the validator's own independent
+        # re-fetch (inside its captured leader_fn() call) fails for every
+        # publisher, forcing both sources unusable regardless of what the
+        # model still confidently claims from its (unaware) mocked LLM
+        # response.
+        event_id = self._create_accept(contract, direct_vm, direct_alice, direct_bob)
+        envelope = self._envelope(
+            event_id,
+            '{"properties": {"value": 12, "unit": "mm"}}',
+            '{"value": 13, "unit": "mm"}',
+        )
+        direct_vm.mock_llm(r".*", envelope)
+        direct_vm.warp("2027-01-15T18:00:00Z")
+        with direct_vm.prank(direct_alice):
+            direct_vm.value = ADJUDICATE_BOND
+            contract.adjudicate(event_id=event_id)
+
+        assert direct_vm.run_validator(leader_result=envelope) is False
+
+
 class TestAppealBondResolution:
     """Regression coverage for a fund-stranding path: _settle() (called
     from finalize()) must read and clear rec["appeal"], or an appeal bond

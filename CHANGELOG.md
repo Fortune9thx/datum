@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.5.0] - 2026-09-27
+
+### Fixed
+
+- **Critical**: `adjudicate()`'s `validator_fn` parsed `json.loads(str(leader_result))`, but `leader_result` is a `gl.vm.Return`/`VMError` wrapper, not the leader's raw value — `str()` on the wrapper never produces valid JSON, so the validator returned `False` unconditionally on a real network. Invisible locally because `gltest`'s own `run_nondet` mock never enforces `validator_fn`'s return value on the outer result at all. Fixed by unwrapping `.calldata` first. Added `direct_vm.run_validator()`-based tests, the only way to actually exercise the real captured validator in `gltest`.
+- A Portal steward correctly rejected the previous round's fix as insufficient: hashing a citation the model itself supplied doesn't verify its publisher origin. `leader_fn()` now fetches each locked publisher's real data itself (`gl.nondet.web.get()` against a URL built in code from locked constitution fields — `build_publisher_url`, real endpoints for all six publishers), hands the model only the already-fetched text to interpret, and checks the model's echoed `"raw"` against that same fetched text before trusting anything else about the source. A citation that doesn't match, or a publisher that's unreachable, is refused regardless of how plausible the rest of the reading looks.
+
+### Added
+
+- `build_publisher_url()` in `contracts/datum_lib.py` and its test coverage (`TestPublisherUrlBuilder`).
+- `TestValidatorFnRealFetchAndAuthentication` in `test_datum_contract.py` — real, live-exercised proof (via `direct_vm.run_validator()`) that the validator agrees on a genuine match, rejects a fabricated raw citation, and rejects when its own re-fetch is unreachable.
+
 ## [1.4.1] - 2026-09-26
 
 ### Fixed
