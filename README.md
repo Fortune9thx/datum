@@ -83,7 +83,7 @@ Full typed signatures in `contracts/Datum.py`.
 # (an envelope for the wrong event, or keyed by an unauthorized publisher,
 # is refused outright).
 python -m pytest tests/direct/test_datum_lib.py -q
-# 71 passed
+# 83 passed
 
 # Rebuild the deployable bundle + size check:
 python scripts/build_bundle.py
@@ -99,7 +99,12 @@ PYTHONIOENCODING=utf-8 genvm-lint check artifacts/Datum.bundled.py
 # EVERY one of the 12 write methods, against a live GenVM sandbox --
 # including the same event-id / publisher-key binding checks end to end:
 python -m pytest tests/direct/test_datum_contract.py -q
-# 30 passed
+# 33 passed
+
+# Frontend: renders the real ticket page against a fixture record, proving
+# the evidence display (not just the contract-side record shape) is correct:
+cd frontend && npm test
+# 2 passed
 ```
 
 ## Network
@@ -127,6 +132,7 @@ Stated explicitly rather than left to be inferred from where a claim appears:
 **Proven only in `gltest` direct-mode (a real GenVM sandbox, but a single in-process leader, not real multi-validator consensus), not yet re-run against this specific deployment:**
 - Every payable method: `create_event`, `accept_event`, `adjudicate`, `appeal`, `re_adjudicate`.
 - **The `validator_fn` fix and the real publisher-fetch authentication** -- a critical bug (the validator unwrapped the leader's result incorrectly and would have rejected every real adjudication unconditionally) and the switch to code-level `gl.nondet.web.get()` fetching were both found and fixed this round, in response to a Portal steward's review. Both are proven via `gltest`'s `direct_vm.run_validator()` -- the only way to exercise the real captured validator closure locally, since `gltest`'s own `run_nondet` mock never enforces `validator_fn`'s return value on `adjudicate()`'s outer result (see `docs/testing.md`) -- but neither has been exercised through genuine multi-node consensus on a live network yet.
+- **The frontend evidence display** -- a second steward round correctly noted the added tests stopped at the contract record shape and never exercised the frontend. `frontend/tests/evidence-display.test.tsx` now renders the real ticket page against a fixture record shaped exactly like `validate_source_reading()`'s output, including a source the real fetch-authentication check rejects, and asserts the rejection reason and provenance fields actually reach the DOM after a tab switch -- not just that the contract-side data is correct.
 - `claim()`'s actual payout -- proven at the internal ledger-accounting level (`claimable` zeroes, the right amount is returned) in `gltest`, not as a real GEN balance delta on a live account on this deployment.
 - The other six write methods with frontend UI entry points (`appeal`, `re_adjudicate`, `lapse_appeal`, `cancel_event`, `expire_event`, `reclaim_bonds`) -- type-checked, never clicked through a live wallet.
 

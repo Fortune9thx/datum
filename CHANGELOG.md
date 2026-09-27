@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.6.0] - 2026-09-27
+
+### Fixed
+
+- A second Portal steward round correctly rejected 1.5.0's tests as still insufficient: they proved `accepted_record`'s shape at the contract level but never exercised the frontend that actually displays it. Added `frontend/tests/evidence-display.test.tsx`, which renders the real ticket page (`frontend/app/app/e/[id]/page.tsx`) against a fixture record shaped exactly like `validate_source_reading()`'s output — including one source the real fetch-authentication check rejects — and asserts the rejection reason and every provenance field (`station_id`, `digest`, `converted`, `product_status`) actually reach the DOM after a tab switch, not just that the underlying data is correct.
+
+### Added
+
+- Frontend test tooling (`vitest`, `@testing-library/react`) and an `npm test` script — the frontend had zero test coverage of any kind before this.
+
 ## [1.5.0] - 2026-09-27
 
 ### Fixed

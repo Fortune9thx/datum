@@ -33,6 +33,17 @@ python -m pytest tests/direct/test_datum_contract.py -q
 
 It cannot simulate two independent validators disagreeing over the network, since there is only one process. The adjudication comparator itself is proven independently at the `datum_lib` level (`TestLyingLeaderDetection`) and, via `run_validator()`, through the real contract-level closure in `gltest` — but a live multi-validator disagreement over a real network has not been captured end-to-end.
 
+## Frontend tests
+
+The two layers above prove the contract's own record shape is correct. Neither one renders anything -- a Portal steward correctly flagged this as a gap: tests that stop at `accepted_record`'s shape don't prove the frontend actually reads and displays it. `frontend/tests/evidence-display.test.tsx` closes that gap by rendering the real ticket page (`frontend/app/app/e/[id]/page.tsx`), not a stand-in, against a `DatumRecord` fixture shaped field-for-field like `validate_source_reading()`'s `_row()` return value:
+
+```bash
+cd frontend
+npm test
+```
+
+2 tests. The first mounts the page with a fixture record carrying one source the real fetch-authentication check accepted and one it rejected (`"raw citation does not match fetched data"` -- the literal rejection reason `datum_lib.validate_source_reading()` returns when a source's claimed `raw` doesn't match the leader's own fetch), and asserts both the accepted row's fields (`station_id`, `digest`, the `usable` pill) and the rejected row's reason render after switching tabs -- not just that the underlying data is correct, but that a person looking at the deployed app can see why a source was refused. The second asserts the page shows an honest "no accepted row yet" per publisher (never a placeholder or a zero) before any record exists. Only `getEvent`/`getRecord`/`useLive`/`useWallet` are mocked; the rendering, tab-switching, and field lookups are the real component code.
+
 ## Static analysis
 
 ```bash
@@ -47,6 +58,7 @@ Runs AST-based safety checks and full schema validation against the deployable b
 python scripts/build_bundle.py
 python -m pytest tests/direct/ -q
 PYTHONIOENCODING=utf-8 genvm-lint check artifacts/Datum.bundled.py
+cd frontend && npm test
 ```
 
 ## Sample adjudication record
