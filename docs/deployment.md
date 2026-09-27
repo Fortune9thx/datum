@@ -5,16 +5,16 @@
 | | |
 |---|---|
 | Network | Studio Next (chain 61997) |
-| Contract | `0xAafb496351df0EEa478c26d7E2f19A3B71d6cE9A` |
-| Deploy tx | `0xa2fec0feab81b75789ce9ca422724c3c85433077389aed0c2552cc91fba4cce9` |
-| Explorer | https://explorer-studio-dev.genlayer.com/address/0xAafb496351df0EEa478c26d7E2f19A3B71d6cE9A |
+| Contract | `0x1428874208700fb96E3b563023dDd0E9aCe8321E` |
+| Deploy tx | `0x76a428f08a79d8d2bfe839ef4ccb4ea4f193a533104461cada1895f617f1b956` |
+| Explorer | https://explorer-studio-dev.genlayer.com/address/0x1428874208700fb96E3b563023dDd0E9aCe8321E |
 | Treasury | `0xC6E6d3b2acCaECeCeB40Ad4bD3dF123DDCB4e537` |
 
 Machine-readable record: [`deploy/deployments.json`](../deploy/deployments.json). Its `bundleSha256` matches `sha256(artifacts/Datum.bundled.py)`.
 
 Studio Next is a development preview and resets periodically. If the contract address stops resolving, it was reset — redeploy with the command below and update `deploy/deployments.json` and the `NEXT_PUBLIC_DATUM_CONTRACT_ADDRESS` environment variable.
 
-This deployment supersedes `0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3`, which is now abandoned — it never held any events, and predates both the checksum-normalization fix and the steward-requested adjudication binding fix (see `docs/audit.md`).
+This deployment supersedes `0xAafb496351df0EEa478c26d7E2f19A3B71d6cE9A`, which is now abandoned — it never held any events, and predates both a critical `validator_fn` fix (it unwrapped the leader's result incorrectly and would have rejected every real adjudication unconditionally) and the switch to real code-level publisher fetching (see `docs/architecture.md`). That address in turn superseded `0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3`, which predates the checksum-normalization and event/publisher-binding fixes.
 
 ## Deploy arguments must not be JSON-quoted
 
@@ -33,7 +33,7 @@ Every prior deploy attempt used the quoted form (`--args '"0xADDR"'`), which is 
 ```bash
 curl -s https://studio-dev.genlayer.com/api \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"gen_getContractSchema","params":["0xAafb496351df0EEa478c26d7E2f19A3B71d6cE9A"]}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"gen_getContractSchema","params":["0x1428874208700fb96E3b563023dDd0E9aCe8321E"]}'
 ```
 
 A live contract returns its method schema. A nonexistent one returns JSON-RPC error `-32001`. The frontend's `probeContract()` (`frontend/src/lib/datum/network.ts`) uses this method.
@@ -41,7 +41,7 @@ A live contract returns its method schema. A nonexistent one returns JSON-RPC er
 A read call is a simpler check:
 
 ```bash
-genlayer call 0xAafb496351df0EEa478c26d7E2f19A3B71d6cE9A get_config
+genlayer call 0x1428874208700fb96E3b563023dDd0E9aCe8321E get_config
 ```
 
 ## Deploying
@@ -85,6 +85,5 @@ Non-payable writes (`finalize`, `cancel_event`, `expire_event`, `lapse_appeal`, 
 
 - Deploy, storage allocation, and method registration — confirmed via `gen_getContractSchema`.
 - A live read (`get_config`).
-- The checksum-normalization fix, confirmed live: `get_claimable` returns the same checksummed address whether queried with a lowercase or checksummed input.
 
-Payable methods have not yet been called against this specific deployment (they were proven on the prior, now-abandoned address — see git history — but not yet re-run here). Local test coverage for every write method, including payable ones, is documented in [testing.md](testing.md).
+Payable methods, including a real `adjudicate()` call exercising the `validator_fn` fix and the real publisher-fetch authentication end to end, have not yet been called against this specific deployment. See [testing.md](testing.md) for local coverage, and the note in the top-level `README.md`'s proof-status section for the exact current state.

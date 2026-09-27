@@ -4,15 +4,15 @@
   "chainId": 61997,
   "rpc": "https://studio-dev.genlayer.com/api",
   "explorer": "https://explorer-studio-dev.genlayer.com",
-  "contractAddress": "0xAafb496351df0EEa478c26d7E2f19A3B71d6cE9A",
-  "deployTxHash": "0xa2fec0feab81b75789ce9ca422724c3c85433077389aed0c2552cc91fba4cce9",
+  "contractAddress": "0x1428874208700fb96E3b563023dDd0E9aCe8321E",
+  "deployTxHash": "0x76a428f08a79d8d2bfe839ef4ccb4ea4f193a533104461cada1895f617f1b956",
   "consensusStatus": "ACCEPTED",
   "deployerAddress": "0xC6E6d3b2acCaECeCeB40Ad4bD3dF123DDCB4e537",
   "treasuryArg": "0xC6E6d3b2acCaECeCeB40Ad4bD3dF123DDCB4e537",
   "dependsHash": "py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng",
   "bundleFile": "artifacts/Datum.bundled.py",
-  "bundleBytes": 43269,
-  "bundleSha256": "de9ac602d07800db9a90a1f02804cc749dc91edbe029dc6048edd591684a9965",
-  "deployedAt": "2026-09-26T22:35:54Z",
-  "note": "Studio Next is a development preview and is periodically reset. If this address stops resolving via gen_getContractSchema, it was reset -- redeploy and update this file. This deployment supersedes 0x3eb7D9044665De3FC78d12bBC8E78d9352EAAdC3, which held no events and is now abandoned -- carries the checksum-normalization fix (get_position/get_positions/get_claimable/get_activity and the constructor) and the steward-requested adjudication binding fix (event_id/publisher-key checks, raw-citation provenance) that the previous deployment predated. See docs/deployment.md's 'Deploy arguments must not be JSON-quoted' section for why three earlier attempts at this exact redeploy failed and what actually fixed it -- it was never a hosted-runtime bug."
+  "bundleBytes": 47396,
+  "bundleSha256": "41b0691868c8124c3bbace10d9629a664d74655c3b71839fdb2e11088c1f5406",
+  "deployedAt": "2026-09-27T16:01:45Z",
+  "note": "Studio Next is a development preview and is periodically reset. If this address stops resolving via gen_getContractSchema, it was reset -- redeploy and update this file. This deployment supersedes 0xAafb496351df0EEa478c26d7E2f19A3B71d6cE9A, which held no events and predates the validator_fn Return-unwrapping fix and the real publisher-fetch authentication (see docs/architecture.md)."
 }

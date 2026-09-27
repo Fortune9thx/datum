@@ -12,7 +12,8 @@ All notable changes to this project are documented in this file.
 ### Added
 
 - `build_publisher_url()` in `contracts/datum_lib.py` and its test coverage (`TestPublisherUrlBuilder`).
-- `TestValidatorFnRealFetchAndAuthentication` in `test_datum_contract.py` — real, live-exercised proof (via `direct_vm.run_validator()`) that the validator agrees on a genuine match, rejects a fabricated raw citation, and rejects when its own re-fetch is unreachable.
+- `TestValidatorFnRealFetchAndAuthentication` in `test_datum_contract.py` — real proof (via `direct_vm.run_validator()`) that the validator agrees on a genuine match, rejects a fabricated raw citation, and rejects when its own re-fetch is unreachable.
+- Redeployed to `0x1428874208700fb96E3b563023dDd0E9aCe8321E` (deploy tx `0x76a428f08a79d8d2bfe839ef4ccb4ea4f193a533104461cada1895f617f1b956`), carrying both this round's fixes live. The prior address, `0xAafb496351df0EEa478c26d7E2f19A3B71d6cE9A`, predated them and is now abandoned.
 
 ## [1.4.1] - 2026-09-26
 

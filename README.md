@@ -4,7 +4,7 @@ DATUM settles one question on-chain: did a named instrument at a named official 
 
 **Live app:** https://datum-gamma.vercel.app — reading the live contract (LIVE banner with the deployed address; board is empty because no events exist yet, never placeholder rows).
 
-**Contract:** [`0xAafb496351df0EEa478c26d7E2f19A3B71d6cE9A`](https://explorer-studio-dev.genlayer.com/address/0xAafb496351df0EEa478c26d7E2f19A3B71d6cE9A) — Studio Next, chain 61997. Deploy tx [`0xa2fec0feab81b75789ce9ca422724c3c85433077389aed0c2552cc91fba4cce9`](https://explorer-studio-dev.genlayer.com/tx/0xa2fec0feab81b75789ce9ca422724c3c85433077389aed0c2552cc91fba4cce9), ACCEPTED.
+**Contract:** [`0x1428874208700fb96E3b563023dDd0E9aCe8321E`](https://explorer-studio-dev.genlayer.com/address/0x1428874208700fb96E3b563023dDd0E9aCe8321E) — Studio Next, chain 61997. Deploy tx [`0x76a428f08a79d8d2bfe839ef4ccb4ea4f193a533104461cada1895f617f1b956`](https://explorer-studio-dev.genlayer.com/tx/0x76a428f08a79d8d2bfe839ef4ccb4ea4f193a533104461cada1895f617f1b956), ACCEPTED.
 
 **Create tx:** payable `create_event` has not yet landed on-chain. `genlayer write` (the CLI) cannot attach GEN to any payable method — confirmed by reading its source. `scripts/create_event.mjs` builds a real constitution from the contract's own live registry and config and calls `create_event` with the correct value attached; it needs the deployer keystore's password to run, which is never stored or guessed. Exact command and full detail in [docs/deployment.md](docs/deployment.md).
 
@@ -122,13 +122,12 @@ Stated explicitly rather than left to be inferred from where a claim appears:
 **Proven on real Studio Next execution:**
 - Deploy itself (constructor, storage allocation, all 22 methods registered) -- `gen_getContractSchema` against the live address.
 - A real read (`get_config`) returning real on-chain state.
-- The checksum-normalization fix -- `get_claimable` returns the same checksummed address whether queried with a lowercase or checksummed input.
-- On the prior deployment (superseded, same contract logic minus this repo's two most recent fixes -- see git history): a real non-payable write (`expire_event` on a nonexistent id) returning the contract's own `event not found` UserError from a real consensus round, and a real payable `create_event` reaching `FINALIZED` with the correct value attached.
+- On prior, now-superseded deployments (same underlying logic minus this repo's most recent fixes -- see git history): the checksum-normalization fix; a real non-payable write (`expire_event` on a nonexistent id) returning the contract's own error from a real consensus round; and a real payable `create_event` reaching `FINALIZED` with the correct value attached.
 
 **Proven only in `gltest` direct-mode (a real GenVM sandbox, but a single in-process leader, not real multi-validator consensus), not yet re-run against this specific deployment:**
 - Every payable method: `create_event`, `accept_event`, `adjudicate`, `appeal`, `re_adjudicate`.
-- The lying-leader rejection (`adjudicate()`'s validator independently re-fetching and rejecting a leader whose result disagrees) -- proven at the `datum_lib` comparator level and via `gltest`'s single-leader execution, but never against two genuinely independent GenVM nodes actually disagreeing, which `gltest` cannot simulate.
-- `claim()`'s actual payout -- proven at the internal ledger-accounting level (`claimable` zeroes, the right amount is returned) in `gltest`, not as a real GEN balance delta on a live account, since no real stake has moved yet to claim.
+- **The `validator_fn` fix and the real publisher-fetch authentication** -- a critical bug (the validator unwrapped the leader's result incorrectly and would have rejected every real adjudication unconditionally) and the switch to code-level `gl.nondet.web.get()` fetching were both found and fixed this round, in response to a Portal steward's review. Both are proven via `gltest`'s `direct_vm.run_validator()` -- the only way to exercise the real captured validator closure locally, since `gltest`'s own `run_nondet` mock never enforces `validator_fn`'s return value on `adjudicate()`'s outer result (see `docs/testing.md`) -- but neither has been exercised through genuine multi-node consensus on a live network yet.
+- `claim()`'s actual payout -- proven at the internal ledger-accounting level (`claimable` zeroes, the right amount is returned) in `gltest`, not as a real GEN balance delta on a live account on this deployment.
 - The other six write methods with frontend UI entry points (`appeal`, `re_adjudicate`, `lapse_appeal`, `cancel_event`, `expire_event`, `reclaim_bonds`) -- type-checked, never clicked through a live wallet.
 
 ## What we refused (by design, at `create_event` time)
